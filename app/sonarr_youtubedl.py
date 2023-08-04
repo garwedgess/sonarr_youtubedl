@@ -483,7 +483,6 @@ class SonarrYTDL(object):
                                 'noplaylist': True,
                             }
                             ytdl_format_options = self.appendcookie(ytdl_format_options, cookies)
-                            ytdlopts = self.append_extra_args(ytdlopts)
                             if 'format' in ser:
                                 ytdl_format_options = self.customformat(ytdl_format_options, ser['format'])
                             if 'subtitles' in ser:
