@@ -1,13 +1,14 @@
-FROM python:3.9-buster
+FROM python:3.9-slim-buster
 LABEL maintainer="Martin Jones <whatdaybob@outlook.com>"
 
 # Update and install ffmpeg
 RUN apt-get update && \
-    apt-get install -y ffmpeg 
+    apt-get install -y ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy and install requirements
 COPY requirements.txt requirements.txt
-RUN pip3 install -r requirements.txt
+RUN pip3 install --no-compile --no-cache-dir -r requirements.txt
 
 # create abc user so root isn't used
 RUN \
