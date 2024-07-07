@@ -16,10 +16,11 @@ import argparse
 # allow debug arg for verbose logging
 parser = argparse.ArgumentParser(description='Process some integers.')
 parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+parser.add_argument('--nologfile', action='store_true', help='Enable write to logfile')
 args = parser.parse_args()
 
 # setup logger
-logger = setup_logging(True, True, args.debug)
+logger = setup_logging(not args.nologfile, True, args.debug)
 
 date_format = "%Y-%m-%dT%H:%M:%SZ"
 now = datetime.now()
@@ -51,8 +52,8 @@ class SonarrYTDL(object):
                     logger.debug('DEBUGGING ENABLED')
             except AttributeError:
                 self.debug = False
-        except Exception:
-            sys.exit("Error with sonarrytdl config.yml values.")
+        except Exception as e:
+            sys.exit(f"Error with sonarrytdl config.yml values: {e}")
 
         # Sonarr Setup
         try:
@@ -75,8 +76,8 @@ class SonarrYTDL(object):
             )
             self.sonarr_api_version = api
             self.api_key = cfg['sonarr']['apikey']
-        except Exception:
-            sys.exit("Error with sonarr config.yml values.")
+        except Exception as e:
+            sys.exit(f"Error with sonarr config.yml values: {e}")
 
         # YTDL Setup
         try:
@@ -94,7 +95,7 @@ class SonarrYTDL(object):
 
             # Extra-args
             self.ytdl_extra_args = dict()
-            if cfg['ytdl'].get('extra_args') != None:
+            if cfg['ytdl'].get('extra_args') is not None:
                 for key, value in cfg['ytdl']['extra_args'].items():
                     if value.lower() in ('true', 'false'):
                         self.ytdl_extra_args[key] = bool(value)
@@ -112,52 +113,65 @@ class SonarrYTDL(object):
         except Exception as e:
             sys.exit(f"Error with series config.yml values: {e}")
 
-        # Path munging
-        self.path = ""
-        self.localpath = "/sonarr_root"
-
         try:
             self.path = cfg['sonarr']['path']
-            self.localpath = cfg['sonarr']['localpath']
-        except Exception:
-            pass
-#            sys.exit("Error with sonarr config.yml values.")
+        except Exception as e:
+            sys.exit(f"Error with series config.yml values: {e}")
 
         res = self.get_formats()
         self.update_formats(res)
-        logger.debug("Using number Style: %s Folder: %s" % (self.numberStyle,self.seasonFormat))
+        logger.debug(f"Using number Style: {self.numberStyle} Folder: {self.seasonFormat}")
 
-    def update_formats(self,res):
+    def extract_number_style(self, text):
+        # Regular expression to cover all three cases
+        pattern = re.compile(r'\s?[^.\s]*\{season:\d+\}\s?[^\s]*\{episode:\d+\}')
+        matches = pattern.findall(text)
+
+        if not matches:
+            return "S{season:00}E{episode:00}"
+
+        return ''.join(match.strip() for match in matches)
+
+    def update_formats(self, res):
         """Update Sonarr formats to python formats"""
-        for key in ['seasonFolderFormat', 'numberStyle']:
-            original = res[key]
-            if re.search(":",original):
+        if 'seasonFolderFormat' not in res and 'numberStyle' not in res or 'standardEpisodeFormat' not in res:
+            self.seasonFormat = 'Season {season:02d}'
+            self.numberStyle = 'S{season:02d}E{episode:02d}'
+            logger.debug("Using default formats as not formats found on Sonarr")
+            return
+
+        if 'numberStyle' in res:
+            number_style_key = 'numberStyle'
+        else:
+            number_style_key = 'standardEpisodeFormat'
+
+        logger.debug(f"Using sonarr number style format {number_style_key}")
+
+        for key in ['seasonFolderFormat', number_style_key]:
+            if key == 'standardEpisodeFormat':
+                original = self.extract_number_style(res[key])
+            else:
+                original = res[key]
+            if re.search(":", original):
                 temp = original
                 temp = temp[temp.find(':'):temp.find('}')]
-                length = len(temp)-1
-                rep = ":0"+str(length)+"d"
-                newval = original.replace(temp,rep)
+                length = len(temp) - 1
+                rep = ":0" + str(length) + "d"
+                newval = original.replace(temp, rep)
                 res[key] = newval
         self.seasonFormat = res['seasonFolderFormat']
-        self.numberStyle = res['numberStyle']
+        self.numberStyle = res[number_style_key]
 
     def get_formats(self):
         """Return the naming formats from Sonarr"""
         logger.debug('Get formats')
-        res = self.request_get("{}/{}/config/naming".format(
-            self.base_url,
-            self.sonarr_api_version)
-        )
+        res = self.request_get(f"{self.base_url}/{self.sonarr_api_version}/config/naming")
         return res.json()
 
     def get_quality(self, id):
         """Return the Quality Profile from Sonarr"""
         logger.debug('Get Quality')
-        res = self.request_get("{}/{}/qualityprofile/{}".format(
-            self.base_url,
-            self.sonarr_api_version,
-            id)
-        )
+        res = self.request_get(f"{self.base_url}/{self.sonarr_api_version}/qualityprofile/{id}")
         return res.json()
 
     def get_resolution_max_formats(self, quality_ids):
@@ -165,72 +179,53 @@ class SonarrYTDL(object):
         res_dict = {}
         trans_resolution = {480: 640, 720: 1280, 1080: 1920, 2160: 3840}
 
-        for id in sorted(quality_ids):
-            res = self.get_quality(id)
+        for qid in sorted(quality_ids):
+            res = self.get_quality(qid)
             res_max = 0
             for qual in res['items']:
-              if qual['allowed'] == True:
-                if 'quality' not in qual.keys():
-                    continue
-                resolution = qual['quality']['resolution']
-                res_max = max(res_max,resolution)
+                if qual['allowed']:
+                    if 'quality' not in qual.keys():
+                        continue
+                    resolution = qual['quality']['resolution']
+                    res_max = max(res_max, resolution)
             res_key = trans_resolution[res_max]
-            res_dict[id] = "bestvideo[width<={}]+bestaudio/best[width<={}]".format(res_key,res_key)
+            res_dict[qid] = "bestvideo[width<={}]+bestaudio/best[width<={}]".format(res_key, res_key)
         return res_dict
 
     def get_episodes_by_series_id(self, series_id):
         """Returns all episodes for the given series"""
         logger.debug('Begin call Sonarr for all episodes for series_id: {}'.format(series_id))
-        args = {'seriesId': series_id}
-        res = self.request_get("{}/{}/episode".format(
-            self.base_url, 
-            self.sonarr_api_version
-            ), args
-        )
+        params = {'seriesId': series_id}
+        res = self.request_get(f"{self.base_url}/{self.sonarr_api_version}/episode", params=params)
         return res.json()
 
     def get_episode_files_by_series_id(self, series_id):
         """Returns all episode files for the given series"""
-        res = self.request_get("{}/{}/episodefile?seriesId={}".format(
-            self.base_url, 
-            self.sonarr_api_version,
-            series_id
-        ))
+        res = self.request_get(f"{self.base_url}/{self.sonarr_api_version}/episodefile?seriesId={series_id}")
         return res.json()
 
     def get_series(self):
         """Return all series in your collection"""
         logger.debug('Begin call Sonarr for all available series')
-        res = self.request_get("{}/{}/series".format(
-            self.base_url, 
-            self.sonarr_api_version
-        ))
+        res = self.request_get(f"{self.base_url}/{self.sonarr_api_version}/series")
         return res.json()
 
     def get_series_by_series_id(self, series_id):
         """Return the series with the matching ID or 404 if no matching series is found"""
         logger.debug('Begin call Sonarr for specific series series_id: {}'.format(series_id))
-        res = self.request_get("{}/{}/series/{}".format(
-            self.base_url,
-            self.sonarr_api_version,
-            series_id
-        ))
+        res = self.request_get(f"{self.base_url}/{self.sonarr_api_version}/series/{series_id}")
         return res.json()
 
     def request_get(self, url, params=None):
         """Wrapper on the requests.get"""
         logger.debug('Begin GET with url: {}'.format(url))
-        args = {
+        default_params = {
             "apikey": self.api_key
         }
         if params is not None:
             logger.debug('Begin GET with params: {}'.format(params))
-            args.update(params)
-        url = "{}?{}".format(
-            url,
-            urllib.parse.urlencode(args)
-        )
-        res = requests.get(url)
+            default_params.update(params)
+        res = requests.get(f"{url}?{urllib.parse.urlencode(default_params)}")
         return res
 
     def request_put(self, url, params=None, jsondata=None):
@@ -239,16 +234,16 @@ class SonarrYTDL(object):
         headers = {
             'Content-Type': 'application/json',
         }
-        args = (
+        default_params = (
             ('apikey', self.api_key),
         )
         if params is not None:
-            args.update(params)
+            default_params.update(params)
             logger.debug('Begin PUT with params: {}'.format(params))
         res = requests.post(
             url,
             headers=headers,
-            params=args,
+            params=default_params,
             json=jsondata
         )
         return res
@@ -261,7 +256,7 @@ class SonarrYTDL(object):
             "seriesId": str(series_id)
         }
         res = self.request_put(
-            "{}/{}/command".format(self.base_url, self.sonarr_api_version),
+            f"{self.base_url}/{self.sonarr_api_version}/command",
             None,
             data
         )
@@ -461,19 +456,19 @@ class SonarrYTDL(object):
                         if 'cookies_file' in ser:
                             cookies = ser['cookies_file']
                         ydleps = self.ytdl_eps_search_opts(upperescape(eps['title']), ser['playlistreverse'], cookies)
-                        found, dlurl = self.ytsearch(ydleps, url, name=ser['title']+' - '+eps['title'])
+                        found, dlurl = self.ytsearch(ydleps, url, name=ser['title'] + ' - ' + eps['title'])
                         if found:
                             logger.info("    {}: Found - {}:".format(e + 1, eps['title']))
                             season_dir = self.seasonFormat.format(season=eps['seasonNumber'])
-                            number = self.numberStyle.format(season=eps['seasonNumber'],episode=eps['episodeNumber'])
+                            number = self.numberStyle.format(season=eps['seasonNumber'], episode=eps['episodeNumber'])
                             logger.debug("Profile: %s Using format: %s" % (ser['qualityProfileId'],
-                                            self.ytdl_quality[ser['qualityProfileId']]))
+                                                                           self.ytdl_quality[ser['qualityProfileId']]))
                             ytdl_format_options = {
                                 'format': self.ytdl_quality[ser['qualityProfileId']],
                                 'quiet': True,
                                 'merge-output-format': 'mp4',
-                                'outtmpl': '/{0}/{1}/{2} - {3} - {4} WEBDL.%(ext)s'.format(
-                                    ser['path'].replace(self.path,self.localpath),
+                                'outtmpl': '{0}/{1}/{2} - {3} - {4} WEBDL.%(ext)s'.format(
+                                    self.path,
                                     season_dir,
                                     ser['title'],
                                     number,
@@ -501,7 +496,6 @@ class SonarrYTDL(object):
                                         'subtitleslangs': ser['subtitles_languages'],
                                         'postprocessors': postprocessors,
                                     })
-
 
                             if self.debug is True:
                                 ytdl_format_options.update({
