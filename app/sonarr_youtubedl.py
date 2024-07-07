@@ -467,13 +467,7 @@ class SonarrYTDL(object):
                                 'format': self.ytdl_quality[ser['qualityProfileId']],
                                 'quiet': True,
                                 'merge-output-format': 'mp4',
-                                'outtmpl': '{0}/{1}/{2} - {3} - {4} WEBDL.%(ext)s'.format(
-                                    self.path,
-                                    season_dir,
-                                    ser['title'],
-                                    number,
-                                    eps['title']
-                                ),
+                                'outtmpl': f"{self.path}/{ser['title']}/{season_dir}/{ser['title']} - {number} - {eps['title']} WEBDL.%(ext)s",
                                 'progress_hooks': [ytdl_hooks],
                                 'noplaylist': True,
                             }
