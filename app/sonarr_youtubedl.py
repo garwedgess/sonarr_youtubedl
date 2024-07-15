@@ -463,11 +463,12 @@ class SonarrYTDL(object):
                             number = self.numberStyle.format(season=eps['seasonNumber'], episode=eps['episodeNumber'])
                             logger.debug("Profile: %s Using format: %s" % (ser['qualityProfileId'],
                                                                            self.ytdl_quality[ser['qualityProfileId']]))
+                            clean_episode_title = eps['title'].replace("/", "")
                             ytdl_format_options = {
                                 'format': self.ytdl_quality[ser['qualityProfileId']],
                                 'quiet': True,
                                 'merge-output-format': 'mp4',
-                                'outtmpl': f"{self.path}/{ser['title']}/{season_dir}/{ser['title']} - {number} - {eps['title']} WEBDL.%(ext)s",
+                                'outtmpl': f"{self.path}/{ser['title']}/{season_dir}/{ser['title']} - {number} - {clean_episode_title} WEBDL.%(ext)s",
                                 'progress_hooks': [ytdl_hooks],
                                 'noplaylist': True,
                             }

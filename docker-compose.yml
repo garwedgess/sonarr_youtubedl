@@ -1,0 +1,16 @@
+services:
+  sonarr_youtubedl:
+    image: wedgess/sonarr_youtubedl:latest
+    container_name: sonarr-youtubedl
+    volumes:
+      - ${APPDATADIR}/sonarr_ytdl/config:/config
+      - ${DATADIR}/tvshows:/sonarr_root
+      - ${APPDATADIR}/sonarr_ytdl/logs:/logs
+    environment:
+      PUID: $PUID
+      PGID: $PGID
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+    restart: unless-stopped
+    build:
+      context: ${DOCKERDIR}/custom/sonarr_youtubedl
