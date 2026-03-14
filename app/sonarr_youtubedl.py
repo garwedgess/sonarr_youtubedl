@@ -37,7 +37,6 @@ class SonarrYTDL(object):
         cfg = checkconfig()
 
         # Sonarr_YTDL Setup
-
         try:
             self.set_scan_interval(cfg['sonarrytdl']['scan_interval'])
             try:
@@ -107,16 +106,18 @@ class SonarrYTDL(object):
         except Exception as e:
             sys.exit(f"Error with ytdl config.yml values: {e}")
 
-        # YTDL Setup
+        # Series config
         try:
             self.series = cfg["series"]
         except Exception as e:
             sys.exit(f"Error with series config.yml values: {e}")
 
+        # Path config - localpath allows Sonarr path and container path to differ
         try:
-            self.path = cfg['sonarr']['path']
+            self.path = cfg['sonarr'].get('path', '')
+            self.localpath = cfg['sonarr'].get('localpath', '/sonarr_root')
         except Exception as e:
-            sys.exit(f"Error with series config.yml values: {e}")
+            sys.exit(f"Error with sonarr config.yml values: {e}")
 
         res = self.get_formats()
         self.update_formats(res)
@@ -249,10 +250,24 @@ class SonarrYTDL(object):
         return res
 
     def rescanseries(self, series_id):
-        """Refresh series information from trakt and rescan disk"""
+        """Force Sonarr to rescan disk for this series"""
         logger.debug('Begin call Sonarr to rescan for series_id: {}'.format(series_id))
         data = {
             "name": "RescanSeries",
+            "seriesId": str(series_id)
+        }
+        res = self.request_put(
+            f"{self.base_url}/{self.sonarr_api_version}/command",
+            None,
+            data
+        )
+        return res.json()
+
+    def refreshseries(self, series_id):
+        """Force Sonarr to refresh series metadata"""
+        logger.debug('Begin call Sonarr to refresh for series_id: {}'.format(series_id))
+        data = {
+            "name": "RefreshSeries",
             "seriesId": str(series_id)
         }
         res = self.request_put(
@@ -367,7 +382,6 @@ class SonarrYTDL(object):
         }
         return {**ytdlopts, **self.ytdl_extra_args, **pot_args}
 
-
     def appendcookie(self, ytdlopts, cookies=None):
         """Checks if specified cookie file exists in config
         - ``ytdlopts``: Youtube-dl options to append cookie to
@@ -387,7 +401,7 @@ class SonarrYTDL(object):
                 if self.debug is True:
                     logger.debug('  Cookies file used: {}'.format(cookie_path))
             if cookie_exists is False:
-                logger.warning('  cookie files specified but doesn''t exist.')
+                logger.warning('  cookie files specified but doesn\'t exist.')
             return ytdlopts
         else:
             return ytdlopts
@@ -478,6 +492,8 @@ class SonarrYTDL(object):
                             ser['title'], elapsed, min_interval))
                         continue
                 last_checked[ser['id']] = now
+                downloaded_any = False
+
                 for e, eps in enumerate(episodes):
                     if ser['id'] == eps['seriesId']:
                         cookies = None
@@ -495,11 +511,15 @@ class SonarrYTDL(object):
                             logger.debug("Profile: %s Using format: %s" % (ser['qualityProfileId'],
                                                                            self.ytdl_quality[ser['qualityProfileId']]))
                             clean_episode_title = eps['title'].replace("/", "")
+                            if self.path:
+                                series_path = ser['path'].replace(self.path, self.localpath)
+                            else:
+                                series_path = f"{self.localpath}/{ser['title']}"
                             ytdl_format_options = {
                                 'format': self.ytdl_quality[ser['qualityProfileId']],
                                 'quiet': True,
                                 'merge-output-format': 'mp4',
-                                'outtmpl': f"{self.path}/{ser['title']}/{season_dir}/{ser['title']} - {number} - {clean_episode_title} WEBDL.%(ext)s",
+                                'outtmpl': f"{series_path}/{season_dir}/{ser['title']} - {number} - {clean_episode_title} WEBDL.%(ext)s",
                                 'progress_hooks': [ytdl_hooks],
                                 'noplaylist': True,
                             }
@@ -534,12 +554,20 @@ class SonarrYTDL(object):
                                 logger.debug(ytdl_format_options)
                             try:
                                 yt_dlp.YoutubeDL(ytdl_format_options).download([dlurl])
-                                self.rescanseries(ser['id'])
+                                downloaded_any = True
                                 logger.info("      Downloaded - {}".format(eps['title']))
                             except Exception as e:
                                 logger.error("      Failed - {} - {}".format(eps['title'], e))
                         else:
                             logger.info("    {}: Missing - {}:".format(e + 1, eps['title']))
+
+                # Rescan once after all episodes for this series have been attempted
+                if downloaded_any:
+                    logger.info("  Rescanning series in Sonarr: {}".format(ser['title']))
+                    time.sleep(5)
+                    self.refreshseries(ser['id'])
+                    self.rescanseries(ser['id'])
+
         else:
             logger.info("Nothing to process")
 
