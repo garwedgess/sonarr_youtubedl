@@ -161,7 +161,7 @@ def setup_logging(lf_enabled=True, lc_enabled=True, debugging=False):
 
     if lc_enabled:
         # setup console log
-        loggerconsole = logging.StreamHandler()
+        loggerconsole = logging.StreamHandler(sys.stdout)
         loggerconsole.setLevel(log_level)
         loggerconsole.set_name('StreamHandler')
         loggerconsole.setFormatter(log_format)

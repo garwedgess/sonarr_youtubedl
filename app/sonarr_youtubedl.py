@@ -27,6 +27,8 @@ date_format = "%Y-%m-%dT%H:%M:%SZ"
 CONFIGFILE = os.environ['CONFIGPATH']
 CONFIGPATH = CONFIGFILE.replace('config.yml', '')
 SCANINTERVAL = 60
+
+# Tracks last yt-dlp scan time per series ID, reset on container restart
 last_checked: dict[int, datetime] = {}
 
 
@@ -135,7 +137,7 @@ class SonarrYTDL(object):
 
     def update_formats(self, res):
         """Update Sonarr formats to python formats"""
-        if 'seasonFolderFormat' not in res and 'numberStyle' not in res or 'standardEpisodeFormat' not in res:
+        if 'seasonFolderFormat' not in res or ('numberStyle' not in res and 'standardEpisodeFormat' not in res):
             self.seasonFormat = 'Season {season:02d}'
             self.numberStyle = 'S{season:02d}E{episode:02d}'
             logger.debug("Using default formats as not formats found on Sonarr")
@@ -226,7 +228,7 @@ class SonarrYTDL(object):
         if params is not None:
             logger.debug('Begin GET with params: {}'.format(params))
             default_params.update(params)
-        res = requests.get(f"{url}?{urllib.parse.urlencode(default_params)}")
+        res = requests.get(f"{url}?{urllib.parse.urlencode(default_params)}", timeout=30)
         return res
 
     def request_put(self, url, params=None, jsondata=None):
@@ -245,7 +247,8 @@ class SonarrYTDL(object):
             url,
             headers=headers,
             params=default_params,
-            json=jsondata
+            json=jsondata,
+            timeout=30
         )
         return res
 
@@ -402,9 +405,7 @@ class SonarrYTDL(object):
                     logger.debug('  Cookies file used: {}'.format(cookie_path))
             if cookie_exists is False:
                 logger.warning('  cookie files specified but doesn\'t exist.')
-            return ytdlopts
-        else:
-            return ytdlopts
+        return ytdlopts
 
     def customformat(self, ytdlopts, customformat=None):
         """Checks if specified cookie file exists in config
@@ -564,7 +565,7 @@ class SonarrYTDL(object):
                 # Rescan once after all episodes for this series have been attempted
                 if downloaded_any:
                     logger.info("  Rescanning series in Sonarr: {}".format(ser['title']))
-                    time.sleep(5)
+                    time.sleep(15)
                     self.refreshseries(ser['id'])
                     self.rescanseries(ser['id'])
 
