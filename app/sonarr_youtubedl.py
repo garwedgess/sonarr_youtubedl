@@ -23,7 +23,6 @@ args = parser.parse_args()
 logger = setup_logging(not args.nologfile, True, args.debug)
 
 date_format = "%Y-%m-%dT%H:%M:%SZ"
-now = datetime.now()
 
 CONFIGFILE = os.environ['CONFIGPATH']
 CONFIGPATH = CONFIGFILE.replace('config.yml', '')
@@ -305,11 +304,12 @@ class SonarrYTDL(object):
                     matched.append(ser)
         for check in matched:
             if not check['monitored']:
-                logger.warn('{0} is not currently monitored'.format(ser['title']))
+                logger.warning('{0} is not currently monitored'.format(check['title']))
         del series[:]
         return matched
 
     def getseriesepisodes(self, series):
+        now = datetime.now()
         needed = []
         quality_ids = set()
         for ser in series[:]:
@@ -437,6 +437,9 @@ class SonarrYTDL(object):
         except Exception as e:
             logger.error(e)
         else:
+            if result is None:
+                logger.error('No result returned from yt-dlp')
+                return False, ''
             video_url = None
             if 'entries' in result:
                 entries = [e for e in result['entries'] if e is not None]
@@ -444,7 +447,7 @@ class SonarrYTDL(object):
                     try:
                         titles = [entry['title'].lower() for entry in entries]
                         index = find_best_match_index(titles, name.lower())
-                        video_url = result['entries'][index].get('webpage_url')
+                        video_url = entries[index].get('webpage_url')
                     except Exception as e:
                         logger.error(e)
             else:
