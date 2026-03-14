@@ -1,45 +1,66 @@
-FROM python:3.9-slim-buster
-LABEL maintainer="Martin Jones <whatdaybob@outlook.com>"
+FROM python:3.12-slim
+LABEL maintainer="Gareth Williams <garethwilliams21@gmail.com>"
 
-# Update and install ffmpeg
+ENV DEBIAN_FRONTEND=noninteractive \
+    NODE_VERSION=22.12.0 \
+    APP_HOME=/app
+
+# Install system packages
 RUN apt-get update && \
-    apt-get install -y ffmpeg gosu && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        git \
+        build-essential \
+        ca-certificates \
+        ffmpeg \
+        gosu \
+        wget \
+        unzip \
+        xz-utils \
+        libffi-dev \
+        libssl-dev \
+        jq \
+        locales && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy and install requirements
-COPY requirements.txt requirements.txt
-RUN pip3 install --no-compile --no-cache-dir -r requirements.txt
+# Install Node.js >=22
+RUN curl -fsSL https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64.tar.xz \
+    | tar -xJ -C /usr/local --strip-components=1 && \
+    node -v && npm -v
 
-# create abc user so root isn't used
-RUN \
-# create some files / folders
-	mkdir -p /config /app /sonarr_root /logs && \
-	touch /var/lock/sonarr_youtube.lock
+# Install bgutil PO token provider
+RUN git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git /root/bgutil-ytdlp-pot-provider && \
+    cd /root/bgutil-ytdlp-pot-provider/server && \
+    npm install && \
+    npx tsc
 
+# Install python requirements
+COPY requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-compile --no-cache-dir -r /tmp/requirements.txt
 
-# add volumes
+# Create folders
+RUN mkdir -p /config /app /sonarr_root /logs && \
+    touch /var/lock/sonarr_youtube.lock
+
+# Volumes
 VOLUME /config
 VOLUME /sonarr_root
 VOLUME /logs
 
-# add local files
+# Copy application
 COPY app/ /app
 
-# update file permissions
-RUN \
-    chmod a+x \
+# Fix permissions
+RUN chmod +x \
     /app/sonarr_youtubedl.py \
-    /app/utils.py \
-    /app/config.yml.template
+    /app/utils.py
 
-# ENV setup
-ENV CONFIGPATH /config/config.yml
+# Environment
+ENV CONFIGPATH=/config/config.yml
 
-# Copy entrypoint script
+# Entrypoint
 COPY entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Use entrypoint script
 ENTRYPOINT ["entrypoint.sh"]
-
-CMD [ "python", "-u", "/app/sonarr_youtubedl.py" ]
+CMD ["python", "-u", "/app/sonarr_youtubedl.py"]

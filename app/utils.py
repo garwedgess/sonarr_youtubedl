@@ -22,9 +22,10 @@ def upperescape(string):
     # UPPERCASE as YTDL is case insensitive for ease.
     string = string.upper()
     # Remove quote characters as YTDL converts these.
-    string = string.replace('’',"'")
-    string = string.replace('“','"')
-    string = string.replace('”','"')
+    string = string.replace('\u2018', "'")  # left single quote → straight
+    string = string.replace('\u2019', "'")  # right single quote / curly apostrophe → straight
+    string = string.replace('"', '"')
+    string = string.replace('"', '"')
     # Replace >1 space with single space
     string = re.sub(" +", " ", string)
     # Escape the characters
@@ -35,15 +36,15 @@ def upperescape(string):
     string = string.replace("\\(", "([\\(]?")
     string = string.replace("\\)", "[\\)]?)?")
     # Make it look for and as whole or ampersands
-    string = string.replace('\\ AND\\ ','\\ (AND|&)\\ ')
+    string = string.replace('\\ AND\\ ', '\\ (AND|&)\\ ')
     # Make punctuation optional for human error
-    string = string.replace("'","([']?)") # optional apostrophe
-    string = string.replace(",","([,]?)") # optional comma
-    string = string.replace("!","([!]?)") # optional question mark
-    string = string.replace("\\.","([\\.]?)") # optional period
-    string = string.replace("\\?","([\\?]?)") # optional question mark
-    string = string.replace(":","([:]?)") # optional colon
-    string = re.sub("S\\\\", "([']?)"+"S\\\\", string) # optional belonging apostrophe (has to be last due to question mark)
+    string = string.replace("'", "(['\u2019]?)")  # optional apostrophe (straight or curly)
+    string = string.replace(",", "([,]?)")         # optional comma
+    string = string.replace("!", "([!]?)")         # optional exclamation mark
+    string = string.replace("\\.", "([\\.]?)")     # optional period
+    string = string.replace("\\?", "([\\?]?)")    # optional question mark
+    string = string.replace(":", "([:]?)")         # optional colon
+    string = re.sub("S\\\\", "(['\u2019]?)" + "S\\\\", string)  # optional belonging apostrophe (straight or curly)
     return string
 
 
@@ -61,13 +62,13 @@ def checkconfig():
     config_file = os.path.abspath(CONFIGFILE)
     config_file_exists = os.path.exists(os.path.abspath(config_file))
     if not config_file_exists:
-        logger.critical('Configuration file not found.')  # print('Configuration file not found.')
+        logger.critical('Configuration file not found.')
         if not config_template_exists:
             os.system('cp /app/config.yml.template ' + config_template)
-        logger.critical("Create a config.yml using config.yml.template as an example.")  # sys.exit("Create a config.yml using config.yml.template as an example.")
+        logger.critical("Create a config.yml using config.yml.template as an example.")
         sys.exit()
     else:
-        logger.info('Configuration Found. Loading file.')  # print('Configuration Found. Loading file.')
+        logger.info('Configuration Found. Loading file.')
         with open(
             config_file,
             "r"
@@ -125,7 +126,7 @@ def ytdl_hooks_debug(d):
     logger = logging.getLogger('sonarr_youtubedl')
     if d['status'] == 'finished':
         file_tuple = os.path.split(os.path.abspath(d['filename']))
-        logger.info("      Done downloading {}".format(file_tuple[1]))  # print("Done downloading {}".format(file_tuple[1]))
+        logger.info("      Done downloading {}".format(file_tuple[1]))
     if d['status'] == 'downloading':
         progress = "      {} - {} - {}".format(d['filename'], d['_percent_str'], d['_eta_str'])
         logger.debug(progress)

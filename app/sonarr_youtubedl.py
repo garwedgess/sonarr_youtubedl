@@ -352,7 +352,19 @@ class SonarrYTDL(object):
         return needed
 
     def append_extra_args(self, ytdlopts):
-        return {**ytdlopts, **self.ytdl_extra_args}
+        pot_args = {
+            'extractor_args': {
+                'youtubepot-bgutilscript': {
+                    'server_home': ['/root/bgutil-ytdlp-pot-provider/server']
+                }
+            },
+            'js_runtimes': {
+                'node': {'path': '/usr/local/bin/node'}
+            },
+            'remote_components': {'ejs:github'},
+        }
+        return {**ytdlopts, **self.ytdl_extra_args, **pot_args}
+
 
     def appendcookie(self, ytdlopts, cookies=None):
         """Checks if specified cookie file exists in config
@@ -370,8 +382,8 @@ class SonarrYTDL(object):
                 ytdlopts.update({
                     'cookiefile': cookie_path
                 })
-                # if self.debug is True:
-                logger.debug('  Cookies file used: {}'.format(cookie_path))
+                if self.debug is True:
+                    logger.debug('  Cookies file used: {}'.format(cookie_path))
             if cookie_exists is False:
                 logger.warning('  cookie files specified but doesn''t exist.')
             return ytdlopts
@@ -400,8 +412,7 @@ class SonarrYTDL(object):
             'ignoreerrors': True,
             'playlistreverse': playlistreverse,
             'matchtitle': regextitle,
-            'quiet': True,
-
+            'quiet': True
         }
         if self.debug is True:
             ytdlopts.update({
@@ -427,13 +438,15 @@ class SonarrYTDL(object):
             logger.error(e)
         else:
             video_url = None
-            if 'entries' in result and len(result['entries']) > 0:
-                try:
-                    titles = [entry['title'].lower() for entry in result['entries']]
-                    index = find_best_match_index(titles, name.lower())
-                    video_url = result['entries'][index].get('webpage_url')
-                except Exception as e:
-                    logger.error(e)
+            if 'entries' in result:
+                entries = [e for e in result['entries'] if e is not None]
+                if len(entries) > 0:
+                    try:
+                        titles = [entry['title'].lower() for entry in entries]
+                        index = find_best_match_index(titles, name.lower())
+                        video_url = result['entries'][index].get('webpage_url')
+                    except Exception as e:
+                        logger.error(e)
             else:
                 video_url = result.get('webpage_url')
             if playlist == video_url:
@@ -455,7 +468,9 @@ class SonarrYTDL(object):
                         url = ser['url']
                         if 'cookies_file' in ser:
                             cookies = ser['cookies_file']
-                        ydleps = self.ytdl_eps_search_opts(upperescape(eps['title']), ser['playlistreverse'], cookies)
+                        escaped = upperescape(eps['title'])
+                        logger.debug(f"matchtitle regex: {escaped}")
+                        ydleps = self.ytdl_eps_search_opts(escaped, ser['playlistreverse'], cookies)
                         found, dlurl = self.ytsearch(ydleps, url, name=ser['title'] + ' - ' + eps['title'])
                         if found:
                             logger.info("    {}: Found - {}:".format(e + 1, eps['title']))
@@ -473,6 +488,7 @@ class SonarrYTDL(object):
                                 'noplaylist': True,
                             }
                             ytdl_format_options = self.appendcookie(ytdl_format_options, cookies)
+                            ytdl_format_options = self.append_extra_args(ytdl_format_options)
                             if 'format' in ser:
                                 ytdl_format_options = self.customformat(ytdl_format_options, ser['format'])
                             if 'subtitles' in ser:
