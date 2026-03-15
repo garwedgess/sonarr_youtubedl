@@ -133,7 +133,7 @@ To enable, mount the staging directory in both this container and Sonarr, then s
 
 ```yaml
 # docker-compose - sonarr_youtubedl service
-- ${DATADIR}/sonarr_youtubedl_staging:/staging
+- ${DATADIR}/downloads/sonarr_youtubedl:/staging
 
 # docker-compose - sonarr service
 - ${DATADIR}/downloads/sonarr_youtubedl:/staging  # or its equivalent host path
@@ -142,7 +142,7 @@ To enable, mount the staging directory in both this container and Sonarr, then s
 ```yaml
 # config.yml
 sonarr:
-  staging_path: /mnt/library/sonarr_youtubedl_staging
+  staging_path: /mnt/library/downloads/sonarr_youtubedl
 ```
 
 If `staging_path` is not set or `/staging` is not writable, staging is automatically disabled and downloads go directly to the library.
