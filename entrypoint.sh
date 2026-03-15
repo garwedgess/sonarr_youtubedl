@@ -14,7 +14,7 @@ if ! id -u tempuser > /dev/null 2>&1; then
 fi
 
 # Change ownership of directories to the host user
-chown -R ${ENV_PUID}:${ENV_GUID} /config /app /sonarr_root /logs /var/lock/sonarr_youtube.lock
+chown -R ${ENV_PUID}:${ENV_GUID} /config /app /sonarr_root /logs /staging /var/lock/sonarr_youtube.lock
 
 # Execute the CMD passed to the Docker container as the specified user
 exec su -s /bin/bash tempuser -c "$*"

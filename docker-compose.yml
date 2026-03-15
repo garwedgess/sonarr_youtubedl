@@ -6,6 +6,7 @@ services:
       - ${APPDATADIR}/sonarr_ytdl/config:/config
       - ${DATADIR}/tvshows:/sonarr_root
       - ${APPDATADIR}/sonarr_ytdl/logs:/logs
+      - ${DATADIR}/downloads/sonarr_youtubedl:/staging
     environment:
       PUID: $PUID
       PGID: $PGID

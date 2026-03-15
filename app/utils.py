@@ -5,11 +5,10 @@ import datetime
 import yaml
 import logging
 from logging.handlers import RotatingFileHandler
-from fuzzywuzzy import fuzz
+from rapidfuzz import fuzz
 
 
 CONFIGFILE = os.environ['CONFIGPATH']
-# CONFIGPATH = CONFIGFILE.replace('config.yml', '')
 
 
 def upperescape(string):
@@ -116,7 +115,7 @@ class YoutubeDLLogger(object):
         self.logger.debug(msg)
 
     def warning(self, msg: str) -> None:
-        self.logger.info(msg)
+        self.logger.warning(msg)
 
     def error(self, msg: str) -> None:
         self.logger.error(msg)
@@ -178,3 +177,4 @@ def find_best_match_index(titles, name):
             best_match_index = i
             best_match_score = score
     return best_match_index
+    
