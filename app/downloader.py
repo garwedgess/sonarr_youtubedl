@@ -25,7 +25,7 @@ def search(playlist_url, series_title, episode_title, playlistreverse, cookies=N
     """Fetch playlist index and return the best matching video URL.
 
     Applies regex filter first, falls back to fuzzy match on full playlist
-    if nothing matches — all in a single API call via extract_flat.
+    if nothing matches - all in a single API call via extract_flat.
     """
     opts = {
         'ignoreerrors': True,

@@ -46,7 +46,7 @@ services:
       - /path/to/appdata/sonarr_ytdl/config:/config
       - /path/to/media/tvshows:/sonarr_root
       - /path/to/appdata/sonarr_ytdl/logs:/logs
-      - /path/to/media/sonarr_youtubedl_staging:/staging  # optional, see Staging below
+      - /path/to/downloads/sonarr_youtubedl:/staging  # optional, see Staging below
     environment:
       PUID: 1000
       PGID: 1000
@@ -64,6 +64,7 @@ docker create \
   -v /path/to/appdata/sonarr_ytdl/config:/config \
   -v /path/to/media/tvshows:/sonarr_root \
   -v /path/to/appdata/sonarr_ytdl/logs:/logs \
+  -v /path/to/downloads/sonarr_youtubedl:/staging \
   -e PUID=1000 \
   -e PGID=1000 \
   --restart unless-stopped \
@@ -135,7 +136,7 @@ To enable, mount the staging directory in both this container and Sonarr, then s
 - ${DATADIR}/sonarr_youtubedl_staging:/staging
 
 # docker-compose - sonarr service
-- ${DATADIR}/sonarr_youtubedl_staging:/staging  # or its equivalent host path
+- ${DATADIR}/downloads/sonarr_youtubedl:/staging  # or its equivalent host path
 ```
 
 ```yaml
@@ -160,7 +161,7 @@ telegram:
 ```
 
 To find your `chat_id`, message your bot then visit:
-`https://api.telegram.org/bot<your_token>/getUpdates`
+`api.telegram.org/bot<your_token>/getUpdates`
 
 ## Series options
 

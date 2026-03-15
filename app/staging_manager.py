@@ -12,7 +12,7 @@ STAGING_MAX_AGE_MINUTES = 60
 
 
 def is_available():
-    """Returns True if staging is usable — directory exists and is writable."""
+    """Returns True if staging is usable - directory exists and is writable."""
     return os.path.isdir(STAGING_DIR) and os.access(STAGING_DIR, os.W_OK)
 
 
@@ -43,7 +43,7 @@ def notify_sonarr(client, staging_file, sonarr_staging_path):
     if 'id' not in response:
         logger.warning(f"Sonarr rejected import for: {filename}")
         return False
-    logger.info(f"Sonarr notified — will import or fallback on next scan: {filename}")
+    logger.info(f"Sonarr notified - will import or fallback on next scan: {filename}")
     return True
 
 

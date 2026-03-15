@@ -135,7 +135,7 @@ class SonarrYTDL:
                     "Falling back to direct library downloads."
                 )
             else:
-                logger.info("Staging not configured — downloads go directly to library")
+                logger.info("Staging not configured - downloads go directly to library")
 
     def _parse_naming(self, res):
         if 'seasonFolderFormat' not in res or (
@@ -295,7 +295,7 @@ class SonarrYTDL:
 
         # Skip if library file exists but Sonarr doesn't know about it
         if self._library_file_exists(ser, eps):
-            logger.info(f"Library file exists for: {eps['title']} — rescanning")
+            logger.info(f"Library file exists for: {eps['title']} - rescanning")
             self.client.refresh(ser['id'])
             self.client.rescan(ser['id'])
             return True
