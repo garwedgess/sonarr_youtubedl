@@ -1,597 +1,406 @@
 #!/usr/bin/env python3
 
-import requests
-import urllib.parse
-import yt_dlp
-import os
-import sys
-import re
-from utils import upperescape, checkconfig, offsethandler, YoutubeDLLogger, ytdl_hooks, ytdl_hooks_debug, setup_logging, find_best_match_index  # NOQA
-from datetime import datetime
-import schedule
-import time
 import logging
+import os
+import re
+import shutil
+import sys
+import time
+from datetime import datetime
+
+import schedule
+
+import downloader
+import staging_manager as staging
+from sonarr_client import SonarrClient
+from notifier import Notifier
+from utils import upperescape, checkconfig, offsethandler, setup_logging
+
 import argparse
 
-# allow debug arg for verbose logging
-parser = argparse.ArgumentParser(description='Process some integers.')
-parser.add_argument('--debug', action='store_true', help='Enable debug logging')
-parser.add_argument('--nologfile', action='store_true', help='Enable write to logfile')
+parser = argparse.ArgumentParser()
+parser.add_argument('--debug', action='store_true')
+parser.add_argument('--nologfile', action='store_true')
 args = parser.parse_args()
 
-# setup logger
 logger = setup_logging(not args.nologfile, True, args.debug)
 
 date_format = "%Y-%m-%dT%H:%M:%SZ"
-
 CONFIGFILE = os.environ['CONFIGPATH']
 CONFIGPATH = CONFIGFILE.replace('config.yml', '')
 SCANINTERVAL = 60
+LOW_SCAN_INTERVAL_WARN = 10
 
-# Tracks last yt-dlp scan time per series ID, reset on container restart
 last_checked: dict[int, datetime] = {}
 
 
-class SonarrYTDL(object):
+class SonarrYTDL:
 
     def __init__(self):
-        """Set up app with config file settings"""
         cfg = checkconfig()
 
-        # Sonarr_YTDL Setup
         try:
-            self.set_scan_interval(cfg['sonarrytdl']['scan_interval'])
-            try:
-                self.debug = cfg['sonarrytdl']['debug'] in ['true', 'True']
-                if self.debug:
-                    logger.setLevel(logging.DEBUG)
-                    for logs in logger.handlers:
-                        if logs.name == 'FileHandler':
-                            logs.setLevel(logging.DEBUG)
-                        if logs.name == 'StreamHandler':
-                            logs.setLevel(logging.DEBUG)
-                    logger.debug('DEBUGGING ENABLED')
-            except AttributeError:
-                self.debug = False
+            self._configure_logging(cfg)
+            self._configure_sonarr(cfg)
+            self._configure_ytdl(cfg)
+            self._configure_paths(cfg)
+            self._configure_staging()
+        except SystemExit:
+            raise
         except Exception as e:
-            sys.exit(f"Error with sonarrytdl config.yml values: {e}")
+            sys.exit(f"Configuration error: {e}")
 
-        # Sonarr Setup
-        try:
-            api = "api"
-            scheme = "http"
-            basedir = ""
-            if cfg['sonarr'].get('version', '').lower() == 'v4':
-                api = "api/v3"
-                logger.debug('Sonarr api set to v4')
-            if cfg['sonarr']['ssl'].lower() == 'true':
-                scheme = "https"
-            if cfg['sonarr'].get('basedir', ''):
-                basedir = '/' + cfg['sonarr'].get('basedir', '')
+        self.series_config = cfg.get('series', [])
+        self.client = SonarrClient(self.base_url, self.api_version, self.api_key)
 
-            self.base_url = "{0}://{1}:{2}{3}".format(
-                scheme,
-                cfg['sonarr']['host'],
-                str(cfg['sonarr']['port']),
-                basedir
+        res = self.client.get_naming_config()
+        self._parse_naming(res)
+        logger.debug(f"Number style: {self.number_style} folder: {self.season_format}")
+        self.notifier = Notifier(cfg)
+
+    def _configure_logging(self, cfg):
+        global SCANINTERVAL
+        interval = int(cfg['sonarrytdl']['scan_interval'])
+        if interval != SCANINTERVAL:
+            SCANINTERVAL = interval
+            logger.info(f"Scan interval: every {interval} minutes")
+        else:
+            logger.info(f"Scan interval: every {SCANINTERVAL} minutes (default)")
+
+        if SCANINTERVAL < LOW_SCAN_INTERVAL_WARN:
+            logger.warning(
+                f"scan_interval is {SCANINTERVAL} minutes. This makes frequent requests "
+                f"to Sonarr and YouTube. Consider using min_check_interval per series."
             )
-            self.sonarr_api_version = api
-            self.api_key = cfg['sonarr']['apikey']
-        except Exception as e:
-            sys.exit(f"Error with sonarr config.yml values: {e}")
 
-        # YTDL Setup
         try:
-            self.ytdl_format = cfg['ytdl']['default_format']
+            self.debug = cfg['sonarrytdl']['debug'] in ['true', 'True']
+            if self.debug:
+                logger.setLevel(logging.DEBUG)
+                for h in logger.handlers:
+                    h.setLevel(logging.DEBUG)
+                logger.debug('DEBUGGING ENABLED')
+        except (AttributeError, KeyError):
+            self.debug = False
 
-            self.ytdl_subtitles = False
-            if 'subtitles' in cfg['ytdl'].keys():
-                self.ytdl_subtitles = True
-                self.ytdl_subtitles_languages = ["en"]
-                if 'languages' in cfg['ytdl']["subtitles"]:
-                    self.ytdl_subtitles_languages = cfg['ytdl']["subtitles"]["languages"]
-                self.ytdl_subtitles_autogenerated = False
-                if 'autogenerated' in cfg['ytdl']["subtitles"]:
-                    self.ytdl_subtitles_autogenerated = bool(cfg['ytdl']["subtitles"]['autogenerated'])
+    def _configure_sonarr(self, cfg):
+        sonarr = cfg['sonarr']
+        scheme = 'https' if sonarr['ssl'].lower() == 'true' else 'http'
+        basedir = f"/{sonarr['basedir']}" if sonarr.get('basedir') else ''
+        api = 'api/v3' if sonarr.get('version', '').lower() == 'v4' else 'api'
+        if api == 'api/v3':
+            logger.debug('Sonarr api set to v4')
 
-            # Extra-args
-            self.ytdl_extra_args = dict()
-            if cfg['ytdl'].get('extra_args') is not None:
-                for key, value in cfg['ytdl']['extra_args'].items():
-                    if value.lower() in ('true', 'false'):
-                        self.ytdl_extra_args[key] = bool(value)
-                    else:
-                        try:
-                            self.ytdl_extra_args[key] = int(value)
-                        except ValueError:
-                            self.ytdl_extra_args[key] = value
-        except Exception as e:
-            sys.exit(f"Error with ytdl config.yml values: {e}")
+        self.base_url = f"{scheme}://{sonarr['host']}:{sonarr['port']}{basedir}"
+        self.api_version = api
+        self.api_key = sonarr['apikey']
 
-        # Series config
-        try:
-            self.series = cfg["series"]
-        except Exception as e:
-            sys.exit(f"Error with series config.yml values: {e}")
+    def _configure_ytdl(self, cfg):
+        ytdl = cfg.get('ytdl', {})
+        self.ytdl_format = ytdl.get('default_format', 'bestvideo+bestaudio/best')
+        self.ytdl_subtitles = None
 
-        # Path config - localpath allows Sonarr path and container path to differ
-        try:
-            self.path = cfg['sonarr'].get('path', '')
-            self.localpath = cfg['sonarr'].get('localpath', '/sonarr_root')
-        except Exception as e:
-            sys.exit(f"Error with sonarr config.yml values: {e}")
+        if 'subtitles' in ytdl:
+            self.ytdl_subtitles = {
+                'languages': ytdl['subtitles'].get('languages', ['en']),
+                'autogenerated': ytdl['subtitles'].get('autogenerated', False),
+            }
 
-        res = self.get_formats()
-        self.update_formats(res)
-        logger.debug(f"Using number Style: {self.numberStyle} Folder: {self.seasonFormat}")
+        self.ytdl_extra_args = {}
+        for key, value in (ytdl.get('extra_args') or {}).items():
+            if value.lower() in ('true', 'false'):
+                self.ytdl_extra_args[key] = value.lower() == 'true'
+            else:
+                try:
+                    self.ytdl_extra_args[key] = int(value)
+                except ValueError:
+                    self.ytdl_extra_args[key] = value
 
-    def extract_number_style(self, text):
-        # Regular expression to cover all three cases
-        pattern = re.compile(r'\s?[^.\s]*\{season:\d+\}\s?[^\s]*\{episode:\d+\}')
-        matches = pattern.findall(text)
+    def _configure_paths(self, cfg):
+        sonarr = cfg['sonarr']
+        self.path = sonarr.get('path', '')
+        self.localpath = sonarr.get('localpath', '/sonarr_root')
+        self.staging_sonarr_path = sonarr.get('staging_path', '')
 
-        if not matches:
-            return "S{season:00}E{episode:00}"
+    def _configure_staging(self):
+        if self.staging_sonarr_path and staging.is_available():
+            self.use_staging = True
+            staging.ensure()
+            logger.info(f"Staging enabled: {self.staging_sonarr_path}")
+        else:
+            self.use_staging = False
+            if self.staging_sonarr_path and not staging.is_available():
+                logger.warning(
+                    "staging_path is set but /staging is not available. "
+                    "Falling back to direct library downloads."
+                )
+            else:
+                logger.info("Staging not configured - downloads go directly to library")
 
-        return ''.join(match.strip() for match in matches)
-
-    def update_formats(self, res):
-        """Update Sonarr formats to python formats"""
-        if 'seasonFolderFormat' not in res or ('numberStyle' not in res and 'standardEpisodeFormat' not in res):
-            self.seasonFormat = 'Season {season:02d}'
-            self.numberStyle = 'S{season:02d}E{episode:02d}'
-            logger.debug("Using default formats as not formats found on Sonarr")
+    def _parse_naming(self, res):
+        if 'seasonFolderFormat' not in res or (
+            'numberStyle' not in res and 'standardEpisodeFormat' not in res
+        ):
+            self.season_format = 'Season {season:02d}'
+            self.number_style = 'S{season:02d}E{episode:02d}'
+            logger.debug("Using default Sonarr naming formats")
             return
 
-        if 'numberStyle' in res:
-            number_style_key = 'numberStyle'
-        else:
-            number_style_key = 'standardEpisodeFormat'
+        key = 'numberStyle' if 'numberStyle' in res else 'standardEpisodeFormat'
+        for fmt_key in ['seasonFolderFormat', key]:
+            original = self._extract_number_style(res[fmt_key]) if fmt_key == 'standardEpisodeFormat' else res[fmt_key]
+            if ':' in original:
+                start = original.find(':')
+                end = original.find('}')
+                length = end - start - 1
+                original = original.replace(original[start:end], f":0{length}d")
+                res[fmt_key] = original
 
-        logger.debug(f"Using sonarr number style format {number_style_key}")
+        self.season_format = res['seasonFolderFormat']
+        self.number_style = res[key]
 
-        for key in ['seasonFolderFormat', number_style_key]:
-            if key == 'standardEpisodeFormat':
-                original = self.extract_number_style(res[key])
-            else:
-                original = res[key]
-            if re.search(":", original):
-                temp = original
-                temp = temp[temp.find(':'):temp.find('}')]
-                length = len(temp) - 1
-                rep = ":0" + str(length) + "d"
-                newval = original.replace(temp, rep)
-                res[key] = newval
-        self.seasonFormat = res['seasonFolderFormat']
-        self.numberStyle = res[number_style_key]
+    def _extract_number_style(self, text):
+        pattern = re.compile(r'\s?[^.\s]*\{season:\d+\}\s?[^\s]*\{episode:\d+\}')
+        matches = pattern.findall(text)
+        return ''.join(m.strip() for m in matches) if matches else 'S{season:00}E{episode:00}'
 
-    def get_formats(self):
-        """Return the naming formats from Sonarr"""
-        logger.debug('Get formats')
-        res = self.request_get(f"{self.base_url}/{self.sonarr_api_version}/config/naming")
-        return res.json()
-
-    def get_quality(self, id):
-        """Return the Quality Profile from Sonarr"""
-        logger.debug('Get Quality')
-        res = self.request_get(f"{self.base_url}/{self.sonarr_api_version}/qualityprofile/{id}")
-        return res.json()
-
-    def get_resolution_max_formats(self, quality_ids):
-        """Return dictionary of formats based upon max resolution for quality_ids set"""
-        res_dict = {}
-        trans_resolution = {480: 640, 720: 1280, 1080: 1920, 2160: 3840}
-
-        for qid in sorted(quality_ids):
-            res = self.get_quality(qid)
-            res_max = 0
-            for qual in res['items']:
-                if qual['allowed']:
-                    if 'quality' not in qual.keys():
-                        continue
-                    resolution = qual['quality']['resolution']
-                    res_max = max(res_max, resolution)
-            res_key = trans_resolution[res_max]
-            res_dict[qid] = "bestvideo[width<={}]+bestaudio/best[width<={}]".format(res_key, res_key)
-        return res_dict
-
-    def get_episodes_by_series_id(self, series_id):
-        """Returns all episodes for the given series"""
-        logger.debug('Begin call Sonarr for all episodes for series_id: {}'.format(series_id))
-        params = {'seriesId': series_id}
-        res = self.request_get(f"{self.base_url}/{self.sonarr_api_version}/episode", params=params)
-        return res.json()
-
-    def get_episode_files_by_series_id(self, series_id):
-        """Returns all episode files for the given series"""
-        res = self.request_get(f"{self.base_url}/{self.sonarr_api_version}/episodefile?seriesId={series_id}")
-        return res.json()
-
-    def get_series(self):
-        """Return all series in your collection"""
-        logger.debug('Begin call Sonarr for all available series')
-        res = self.request_get(f"{self.base_url}/{self.sonarr_api_version}/series")
-        return res.json()
-
-    def get_series_by_series_id(self, series_id):
-        """Return the series with the matching ID or 404 if no matching series is found"""
-        logger.debug('Begin call Sonarr for specific series series_id: {}'.format(series_id))
-        res = self.request_get(f"{self.base_url}/{self.sonarr_api_version}/series/{series_id}")
-        return res.json()
-
-    def request_get(self, url, params=None):
-        """Wrapper on the requests.get"""
-        logger.debug('Begin GET with url: {}'.format(url))
-        default_params = {
-            "apikey": self.api_key
-        }
-        if params is not None:
-            logger.debug('Begin GET with params: {}'.format(params))
-            default_params.update(params)
-        res = requests.get(f"{url}?{urllib.parse.urlencode(default_params)}", timeout=30)
-        return res
-
-    def request_put(self, url, params=None, jsondata=None):
-        logger.debug('Begin PUT with url: {}'.format(url))
-        """Wrapper on the requests.put"""
-        headers = {
-            'Content-Type': 'application/json',
-        }
-        default_params = (
-            ('apikey', self.api_key),
+    def _quality_format(self, profile_id):
+        trans = {480: 640, 720: 1280, 1080: 1920, 2160: 3840}
+        res = self.client.get_quality_profile(profile_id)
+        res_max = max(
+            (q['quality']['resolution'] for q in res['items'] if q['allowed'] and 'quality' in q),
+            default=1080
         )
-        if params is not None:
-            default_params.update(params)
-            logger.debug('Begin PUT with params: {}'.format(params))
-        res = requests.post(
-            url,
-            headers=headers,
-            params=default_params,
-            json=jsondata,
-            timeout=30
-        )
-        return res
+        width = trans.get(res_max, 1920)
+        return f"bestvideo[width<={width}]+bestaudio/best[width<={width}]"
 
-    def rescanseries(self, series_id):
-        """Force Sonarr to rescan disk for this series"""
-        logger.debug('Begin call Sonarr to rescan for series_id: {}'.format(series_id))
-        data = {
-            "name": "RescanSeries",
-            "seriesId": str(series_id)
-        }
-        res = self.request_put(
-            f"{self.base_url}/{self.sonarr_api_version}/command",
-            None,
-            data
-        )
-        return res.json()
+    def _series_path(self, ser):
+        if self.path:
+            return ser['path'].replace(self.path, self.localpath)
+        return os.path.join(self.localpath, ser['title'])
 
-    def refreshseries(self, series_id):
-        """Force Sonarr to refresh series metadata"""
-        logger.debug('Begin call Sonarr to refresh for series_id: {}'.format(series_id))
-        data = {
-            "name": "RefreshSeries",
-            "seriesId": str(series_id)
-        }
-        res = self.request_put(
-            f"{self.base_url}/{self.sonarr_api_version}/command",
-            None,
-            data
+    def _library_path(self, ser, eps):
+        season_dir = self.season_format.format(season=eps['seasonNumber'])
+        number = self.number_style.format(season=eps['seasonNumber'], episode=eps['episodeNumber'])
+        clean_title = eps['title'].replace('/', '')
+        return os.path.join(
+            self._series_path(ser),
+            season_dir,
+            f"{ser['title']} - {number} - {clean_title} WEBDL.%(ext)s"
         )
-        return res.json()
+
+    def _library_file_exists(self, ser, eps):
+        number = self.number_style.format(season=eps['seasonNumber'], episode=eps['episodeNumber'])
+        season_dir = self.season_format.format(season=eps['seasonNumber'])
+        season_path = os.path.join(self._series_path(ser), season_dir)
+        if not os.path.isdir(season_path):
+            return False
+        return any(number in f for f in os.listdir(season_path))
 
     def filterseries(self):
-        """Return all series in Sonarr that are to be downloaded by youtube-dl"""
-        series = self.get_series()
+        all_series = self.client.get_series()
         matched = []
-        for ser in series[:]:
-            for wnt in self.series:
-                if wnt['title'] == ser['title']:
-                    # Set default values
-                    ser['playlistreverse'] = True
+        for ser in all_series:
+            cfg = next((w for w in self.series_config if w['title'] == ser['title']), None)
+            if not cfg:
+                continue
 
-                    ser['subtitles'] = self.ytdl_subtitles
-                    if ser['subtitles']:
-                        ser['subtitles_languages'] = self.ytdl_subtitles_languages
-                        ser['subtitles_autogenerated'] = self.ytdl_subtitles_autogenerated
+            ser['playlistreverse'] = cfg.get('playlistreverse', 'True') != 'False'
+            ser['url'] = cfg['url']
+            ser['min_check_interval'] = int(cfg.get('min_check_interval', 0))
+            ser['subtitles'] = self.ytdl_subtitles
+            ser['cookies_file'] = None
 
-                    # Update values
-                    if 'regex' in wnt:
-                        regex = wnt['regex']
-                        if 'sonarr' in regex:
-                            ser['sonarr_regex_match'] = regex['sonarr']['match']
-                            ser['sonarr_regex_replace'] = regex['sonarr']['replace']
-                        if 'site' in regex:
-                            ser['site_regex_match'] = regex['site']['match']
-                            ser['site_regex_replace'] = regex['site']['replace']
-                    if 'offset' in wnt:
-                        ser['offset'] = wnt['offset']
-                    if 'cookies_file' in wnt:
-                        ser['cookies_file'] = wnt['cookies_file']
-                    if 'format' in wnt:
-                        ser['format'] = wnt['format']
-                    if 'playlistreverse' in wnt:
-                        if wnt['playlistreverse'] == 'False':
-                            ser['playlistreverse'] = False
-                    if 'subtitles' in wnt:
-                        ser['subtitles'] = True
-                        if 'languages' in wnt['subtitles']:
-                            ser['subtitles_languages'] = wnt['subtitles']['languages']
-                        if 'autogenerated' in wnt['subtitles']:
-                            ser['subtitles_autogenerated'] = wnt['subtitles']['autogenerated']
-                    ser['url'] = wnt['url']
-                    ser['min_check_interval'] = wnt.get('min_check_interval', 0)
-                    matched.append(ser)
-        for check in matched:
-            if not check['monitored']:
-                logger.warning('{0} is not currently monitored'.format(check['title']))
-        del series[:]
+            if 'cookies_file' in cfg:
+                path = os.path.abspath(CONFIGPATH + cfg['cookies_file'])
+                if os.path.exists(path):
+                    ser['cookies_file'] = path
+                else:
+                    logger.warning(f"Cookie file not found: {path}")
+
+            if 'format' in cfg:
+                ser['format'] = cfg['format']
+
+            if 'subtitles' in cfg:
+                ser['subtitles'] = {
+                    'languages': cfg['subtitles'].get('languages', ['en']),
+                    'autogenerated': cfg['subtitles'].get('autogenerated', False),
+                }
+
+            if 'regex' in cfg:
+                if 'sonarr' in cfg['regex']:
+                    ser['sonarr_regex'] = cfg['regex']['sonarr']
+                if 'site' in cfg['regex']:
+                    ser['site_regex'] = cfg['regex']['site']
+
+            if 'offset' in cfg:
+                ser['offset'] = cfg['offset']
+
+            if not ser['monitored']:
+                logger.warning(f"{ser['title']} is not monitored")
+
+            matched.append(ser)
         return matched
 
-    def getseriesepisodes(self, series):
+    def get_missing_episodes(self, series):
         now = datetime.now()
         needed = []
         quality_ids = set()
+
         for ser in series[:]:
-            episodes = self.get_episodes_by_series_id(ser['id'])
-            for eps in episodes[:]:
+            episodes = self.client.get_episodes(ser['id'])
+            wanted = []
+            for eps in episodes:
+                if not eps['monitored'] or eps['hasFile']:
+                    continue
                 eps_date = now
-                if "airDateUtc" in eps:
+                if 'airDateUtc' in eps:
                     eps_date = datetime.strptime(eps['airDateUtc'], date_format)
                     if 'offset' in ser:
                         eps_date = offsethandler(eps_date, ser['offset'])
-                if not eps['monitored']:
-                    episodes.remove(eps)
-                elif eps['hasFile']:
-                    episodes.remove(eps)
-                elif eps_date > now:
-                    episodes.remove(eps)
-                else:
-                    if 'sonarr_regex_match' in ser:
-                        match = ser['sonarr_regex_match']
-                        replace = ser['sonarr_regex_replace']
-                        eps['title'] = re.sub(match, replace, eps['title'])
-                    needed.append(eps)
-                    quality_ids.add(ser['qualityProfileId'])
+                if eps_date > now:
                     continue
-            if len(episodes) == 0:
-                logger.info('{0} no episodes needed'.format(ser['title']))
+                if 'sonarr_regex' in ser:
+                    eps['title'] = re.sub(
+                        ser['sonarr_regex']['match'],
+                        ser['sonarr_regex']['replace'],
+                        eps['title']
+                    )
+                wanted.append(eps)
+                quality_ids.add(ser['qualityProfileId'])
+
+            if not wanted:
+                logger.info(f"{ser['title']}: no episodes needed")
                 series.remove(ser)
             else:
-                logger.info('{0} missing {1} episodes'.format(
-                    ser['title'],
-                    len(episodes)
-                ))
-                for i, e in enumerate(episodes):
-                    logger.info('  {0}: {1} - {2}'.format(
-                        i + 1,
-                        ser['title'],
-                        e['title']
-                    ))
-        self.ytdl_quality = self.get_resolution_max_formats(quality_ids)
+                needed.extend(wanted)
+                logger.info(f"{ser['title']}: {len(wanted)} episode(s) missing")
+                for i, e in enumerate(wanted):
+                    logger.info(f"  {i + 1}: {ser['title']} - {e['title']}")
+
+        self.quality_map = {qid: self._quality_format(qid) for qid in quality_ids}
         return needed
 
-    def append_extra_args(self, ytdlopts):
-        pot_args = {
-            'extractor_args': {
-                'youtubepot-bgutilscript': {
-                    'server_home': ['/root/bgutil-ytdlp-pot-provider/server']
-                }
-            },
-            'js_runtimes': {
-                'node': {'path': '/usr/local/bin/node'}
-            },
-            'remote_components': {'ejs:github'},
-        }
-        return {**ytdlopts, **self.ytdl_extra_args, **pot_args}
+    def _download_episode(self, ser, eps):
+        number = self.number_style.format(season=eps['seasonNumber'], episode=eps['episodeNumber'])
 
-    def appendcookie(self, ytdlopts, cookies=None):
-        """Checks if specified cookie file exists in config
-        - ``ytdlopts``: Youtube-dl options to append cookie to
-        - ``cookies``: filename of cookie file to append to Youtube-dl opts
-        returns:
-            ytdlopts
-                original if problem with cookies file
-                updated with cookies value if cookies file exists
-        """
-        if cookies is not None:
-            cookie_path = os.path.abspath(CONFIGPATH + cookies)
-            cookie_exists = os.path.exists(cookie_path)
-            if cookie_exists is True:
-                ytdlopts.update({
-                    'cookiefile': cookie_path
-                })
-                if self.debug is True:
-                    logger.debug('  Cookies file used: {}'.format(cookie_path))
-            if cookie_exists is False:
-                logger.warning('  cookie files specified but doesn\'t exist.')
-        return ytdlopts
+        # Resume interrupted staging download
+        if self.use_staging:
+            existing = staging.find_file(ser['title'], number)
+            if existing:
+                logger.info(f"Resuming staged file: {os.path.basename(existing)}")
+                if not staging.notify_sonarr(self.client, existing, self.staging_sonarr_path):
+                    staging._fallback(self.client, existing, self.season_format, self.path, self.localpath)
+                return True
 
-    def customformat(self, ytdlopts, customformat=None):
-        """Checks if specified cookie file exists in config
-        - ``ytdlopts``: Youtube-dl options to change the ytdl format for
-        - ``customformat``: format to download
-        returns:
-            ytdlopts
-                original: if no custom format
-                updated: with new format value if customformat exists
-        """
-        if customformat is not None:
-            ytdlopts.update({
-                'format': customformat
-            })
-            return ytdlopts
+        # Skip if library file exists but Sonarr doesn't know about it
+        if self._library_file_exists(ser, eps):
+            logger.info(f"Library file exists for: {eps['title']} - rescanning")
+            self.client.refresh(ser['id'])
+            self.client.rescan(ser['id'])
+            return True
+
+        # Search YouTube
+        episode_title = eps['title']
+        if 'site_regex' in ser:
+            episode_title = re.sub(ser['site_regex']['match'], ser['site_regex']['replace'], episode_title)
+
+        url = downloader.search(
+            playlist_url=ser['url'],
+            series_title=ser['title'],
+            episode_title=episode_title,
+            playlistreverse=ser['playlistreverse'],
+            cookies=ser.get('cookies_file'),
+            extra_args=self.ytdl_extra_args or None,
+            debug=self.debug
+        )
+
+        if not url:
+            return False
+
+        logger.info(f"Downloading: {eps['title']}")
+
+        quality = ser.get('format') or self.quality_map.get(ser['qualityProfileId'], self.ytdl_format)
+        subtitles = ser.get('subtitles')
+
+        if self.use_staging:
+            outtmpl = staging.staging_path(ser['title'], number)
         else:
-            return ytdlopts
+            outtmpl = self._library_path(ser, eps)
 
-    def ytdl_eps_search_opts(self, regextitle, playlistreverse, cookies=None):
-        ytdlopts = {
-            'ignoreerrors': True,
-            'playlistreverse': playlistreverse,
-            'matchtitle': regextitle,
-            'quiet': True
-        }
-        if self.debug is True:
-            ytdlopts.update({
-                'quiet': False,
-                'logger': YoutubeDLLogger(),
-                'progress_hooks': [ytdl_hooks],
-            })
-        ytdlopts = self.appendcookie(ytdlopts, cookies)
-        ytdlopts = self.append_extra_args(ytdlopts)
-        if self.debug is True:
-            logger.debug('Youtube-DL opts used for episode matching')
-            logger.debug(ytdlopts)
-        return ytdlopts
+        self.notifier.notify_download_start(ser['title'], number, eps['title'])
+        success = downloader.download(
+            url=url,
+            outtmpl=outtmpl,
+            quality_format=quality,
+            cookies=ser.get('cookies_file'),
+            extra_args=self.ytdl_extra_args or None,
+            subtitles=subtitles,
+            debug=self.debug
+        )
 
-    def ytsearch(self, ydl_opts, playlist, name):
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                result = ydl.extract_info(
-                    playlist,
-                    download=False
-                )
-        except Exception as e:
-            logger.error(e)
+        if success:
+            self.notifier.notify_download_complete(ser['title'], number, eps['title'])
         else:
-            if result is None:
-                logger.error('No result returned from yt-dlp')
-                return False, ''
-            video_url = None
-            if 'entries' in result:
-                entries = [e for e in result['entries'] if e is not None]
-                if len(entries) > 0:
-                    try:
-                        titles = [entry['title'].lower() for entry in entries]
-                        index = find_best_match_index(titles, name.lower())
-                        video_url = entries[index].get('webpage_url')
-                    except Exception as e:
-                        logger.error(e)
-            else:
-                video_url = result.get('webpage_url')
-            if playlist == video_url:
-                return False, ''
-            if video_url is None:
-                logger.error('No video_url')
-                return False, ''
-            else:
-                return True, video_url
+            return False
+
+        if self.use_staging:
+            staged = staging.find_file(ser['title'], number)
+            if not staged:
+                logger.error(f"Staged file not found after download: {eps['title']}")
+                return False
+            if not staging.notify_sonarr(self.client, staged, self.staging_sonarr_path):
+                staging._fallback(self.client, staged, self.season_format, self.path, self.localpath)
+        else:
+            logger.info(f"Rescanning {ser['title']} in Sonarr")
+            time.sleep(15)
+            self.client.refresh(ser['id'])
+            self.client.rescan(ser['id'])
+
+        return True
 
     def download(self, series, episodes):
-        if len(series) != 0:
-            logger.info("Processing Wanted Downloads")
-            for s, ser in enumerate(series):
-                logger.info("  {}:".format(ser['title']))
-
-                now = datetime.now()
-                min_interval = ser.get('min_check_interval', 0)
-                last = last_checked.get(ser['id'])
-                if last and min_interval:
-                    elapsed = (now - last).total_seconds() / 60
-                    if elapsed < min_interval:
-                        logger.debug("{}: skipping, checked {:.0f}m ago (min_check_interval: {}m)".format(
-                            ser['title'], elapsed, min_interval))
-                        continue
-                last_checked[ser['id']] = now
-                downloaded_any = False
-
-                for e, eps in enumerate(episodes):
-                    if ser['id'] == eps['seriesId']:
-                        cookies = None
-                        url = ser['url']
-                        if 'cookies_file' in ser:
-                            cookies = ser['cookies_file']
-                        escaped = upperescape(eps['title'])
-                        logger.debug(f"matchtitle regex: {escaped}")
-                        ydleps = self.ytdl_eps_search_opts(escaped, ser['playlistreverse'], cookies)
-                        found, dlurl = self.ytsearch(ydleps, url, name=ser['title'] + ' - ' + eps['title'])
-                        if found:
-                            logger.info("    {}: Found - {}:".format(e + 1, eps['title']))
-                            season_dir = self.seasonFormat.format(season=eps['seasonNumber'])
-                            number = self.numberStyle.format(season=eps['seasonNumber'], episode=eps['episodeNumber'])
-                            logger.debug("Profile: %s Using format: %s" % (ser['qualityProfileId'],
-                                                                           self.ytdl_quality[ser['qualityProfileId']]))
-                            clean_episode_title = eps['title'].replace("/", "")
-                            if self.path:
-                                series_path = ser['path'].replace(self.path, self.localpath)
-                            else:
-                                series_path = f"{self.localpath}/{ser['title']}"
-                            ytdl_format_options = {
-                                'format': self.ytdl_quality[ser['qualityProfileId']],
-                                'quiet': True,
-                                'merge-output-format': 'mp4',
-                                'outtmpl': f"{series_path}/{season_dir}/{ser['title']} - {number} - {clean_episode_title} WEBDL.%(ext)s",
-                                'progress_hooks': [ytdl_hooks],
-                                'noplaylist': True,
-                            }
-                            ytdl_format_options = self.appendcookie(ytdl_format_options, cookies)
-                            ytdl_format_options = self.append_extra_args(ytdl_format_options)
-                            if 'format' in ser:
-                                ytdl_format_options = self.customformat(ytdl_format_options, ser['format'])
-                            if 'subtitles' in ser:
-                                if ser['subtitles']:
-                                    postprocessors = []
-                                    postprocessors.append({
-                                        'key': 'FFmpegSubtitlesConvertor',
-                                        'format': 'srt',
-                                    })
-                                    postprocessors.append({
-                                        'key': 'FFmpegEmbedSubtitle',
-                                    })
-                                    ytdl_format_options.update({
-                                        'writesubtitles': True,
-                                        'writeautomaticsub': ser['subtitles_autogenerated'],
-                                        'subtitleslangs': ser['subtitles_languages'],
-                                        'postprocessors': postprocessors,
-                                    })
-
-                            if self.debug is True:
-                                ytdl_format_options.update({
-                                    'quiet': False,
-                                    'logger': YoutubeDLLogger(),
-                                    'progress_hooks': [ytdl_hooks_debug],
-                                })
-                                logger.debug('Youtube-DL opts used for downloading')
-                                logger.debug(ytdl_format_options)
-                            try:
-                                yt_dlp.YoutubeDL(ytdl_format_options).download([dlurl])
-                                downloaded_any = True
-                                logger.info("      Downloaded - {}".format(eps['title']))
-                            except Exception as e:
-                                logger.error("      Failed - {} - {}".format(eps['title'], e))
-                        else:
-                            logger.info("    {}: Missing - {}:".format(e + 1, eps['title']))
-
-                # Rescan once after all episodes for this series have been attempted
-                if downloaded_any:
-                    logger.info("  Rescanning series in Sonarr: {}".format(ser['title']))
-                    time.sleep(15)
-                    self.refreshseries(ser['id'])
-                    self.rescanseries(ser['id'])
-
-        else:
+        if not series:
             logger.info("Nothing to process")
+            return
 
-    def set_scan_interval(self, interval):
-        global SCANINTERVAL
-        if interval != SCANINTERVAL:
-            SCANINTERVAL = interval
-            logger.info('Scan interval set to every {} minutes by config.yml'.format(interval))
-        else:
-            logger.info('Default scan interval of every {} minutes in use'.format(interval))
-        return
+        if self.use_staging:
+            staging.clean(self.client, self.season_format, self.path, self.localpath)
+
+        logger.info("Processing wanted downloads")
+
+        for ser in series:
+            logger.info(f"  {ser['title']}:")
+
+            now = datetime.now()
+            min_interval = ser.get('min_check_interval', 0)
+            last = last_checked.get(ser['id'])
+            if last and min_interval:
+                elapsed = (now - last).total_seconds() / 60
+                if elapsed < min_interval:
+                    logger.debug(f"{ser['title']}: skipping, checked {elapsed:.0f}m ago")
+                    continue
+
+            last_checked[ser['id']] = now
+
+            for e, eps in enumerate(episodes):
+                if ser['id'] != eps['seriesId']:
+                    continue
+                downloaded = self._download_episode(ser, eps)
+                status = "Downloaded" if downloaded else "Missing"
+                logger.info(f"    {e + 1}: {status} - {eps['title']}")
 
 
 def main():
     client = SonarrYTDL()
     series = client.filterseries()
-    episodes = client.getseriesepisodes(series)
+    episodes = client.get_missing_episodes(series)
     client.download(series, episodes)
-    logger.info('Waiting...')
+    logger.info("Waiting...")
 
 
 if __name__ == "__main__":
-    logger.info('Initial run')
+    logger.info("Initial run")
     main()
     schedule.every(int(SCANINTERVAL)).minutes.do(main)
     while True:
