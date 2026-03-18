@@ -21,7 +21,12 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('--debug', action='store_true')
 parser.add_argument('--nologfile', action='store_true')
-args = parser.parse_args()
+
+# Only parse args when run directly — not when imported by tests
+if __name__ == '__main__' or 'pytest' not in sys.modules:
+    args = parser.parse_args()
+else:
+    args = parser.parse_args([])
 
 logger = setup_logging(not args.nologfile, True, args.debug)
 
