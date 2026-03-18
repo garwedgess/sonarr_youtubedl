@@ -23,8 +23,14 @@ RUN apt-get update && \
         locales && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Node.js >=22
-RUN curl -fsSL https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64.tar.xz \
+# Install Node.js - architecture aware for multi-platform builds
+RUN ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in \
+        amd64) NODE_ARCH="x64" ;; \
+        arm64) NODE_ARCH="arm64" ;; \
+        *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz \
     | tar -xJ -C /usr/local --strip-components=1 && \
     node -v && npm -v
 
