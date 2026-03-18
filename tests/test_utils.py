@@ -254,6 +254,7 @@ class TestOffsethandler:
         assert offsethandler(base, {'days': '0', 'hours': '0'}) == base
 
 
+
 # ---------------------------------------------------------------------------
 # redact_sensitive
 # ---------------------------------------------------------------------------
@@ -373,3 +374,115 @@ class TestRedactSensitive:
         from utils import redact_sensitive
         assert redact_sensitive(42) == 42
         assert redact_sensitive(True) is True
+
+
+# ---------------------------------------------------------------------------
+# calculate_backoff
+# ---------------------------------------------------------------------------
+
+class TestCalculateBackoff:
+
+    # --- First hit always returns base sleep ---
+
+    def test_first_hit_returns_base_sleep(self):
+        from utils import calculate_backoff
+        assert calculate_backoff(1, 900, 2.0, 3600) == 900
+
+    def test_zero_count_returns_base_sleep(self):
+        from utils import calculate_backoff
+        assert calculate_backoff(0, 900, 2.0, 3600) == 900
+
+    # --- Exponential growth ---
+
+    def test_second_hit_doubles(self):
+        from utils import calculate_backoff
+        assert calculate_backoff(2, 900, 2.0, 3600) == 1800
+
+    def test_third_hit_quadruples(self):
+        from utils import calculate_backoff
+        assert calculate_backoff(3, 900, 2.0, 3600) == 3600
+
+    def test_fourth_hit_capped_at_max(self):
+        from utils import calculate_backoff
+        # 900 * 2^3 = 7200, capped at 3600
+        assert calculate_backoff(4, 900, 2.0, 3600) == 3600
+
+    def test_custom_multiplier(self):
+        from utils import calculate_backoff
+        # 900 * 1.5^1 = 1350
+        assert calculate_backoff(2, 900, 1.5, 3600) == 1350
+
+    def test_multiplier_of_one_always_returns_base(self):
+        from utils import calculate_backoff
+        assert calculate_backoff(5, 900, 1.0, 3600) == 900
+
+    # --- Max cap ---
+
+    def test_never_exceeds_max_backoff(self):
+        from utils import calculate_backoff
+        assert calculate_backoff(100, 900, 2.0, 3600) == 3600
+
+    def test_max_backoff_respected_with_small_base(self):
+        from utils import calculate_backoff
+        assert calculate_backoff(10, 60, 2.0, 300) == 300
+
+    # --- Custom base sleep ---
+
+    def test_custom_base_sleep(self):
+        from utils import calculate_backoff
+        assert calculate_backoff(1, 300, 2.0, 3600) == 300
+
+    def test_custom_base_sleep_second_hit(self):
+        from utils import calculate_backoff
+        assert calculate_backoff(2, 300, 2.0, 3600) == 600
+
+
+# ---------------------------------------------------------------------------
+# is_rate_limit_error
+# ---------------------------------------------------------------------------
+
+class TestIsRateLimitError:
+
+    # --- Should detect rate limit ---
+
+    def test_rate_limited_hyphenated(self):
+        from utils import is_rate_limit_error
+        assert is_rate_limit_error('HTTP Error 429: rate-limited')
+
+    def test_rate_limit_two_words(self):
+        from utils import is_rate_limit_error
+        assert is_rate_limit_error('rate limit exceeded')
+
+    def test_try_again_later(self):
+        from utils import is_rate_limit_error
+        assert is_rate_limit_error('Please try again later')
+
+    def test_case_insensitive_uppercase(self):
+        from utils import is_rate_limit_error
+        assert is_rate_limit_error('RATE LIMIT EXCEEDED')
+
+    def test_case_insensitive_mixed(self):
+        from utils import is_rate_limit_error
+        assert is_rate_limit_error('You have been Rate-Limited')
+
+    def test_embedded_in_longer_message(self):
+        from utils import is_rate_limit_error
+        assert is_rate_limit_error('yt-dlp error: HTTP 429 rate-limited by YouTube, try again later')
+
+    # --- Should not detect as rate limit ---
+
+    def test_video_unavailable(self):
+        from utils import is_rate_limit_error
+        assert not is_rate_limit_error('Video unavailable')
+
+    def test_network_error(self):
+        from utils import is_rate_limit_error
+        assert not is_rate_limit_error('Network error: connection refused')
+
+    def test_empty_string(self):
+        from utils import is_rate_limit_error
+        assert not is_rate_limit_error('')
+
+    def test_unrelated_error(self):
+        from utils import is_rate_limit_error
+        assert not is_rate_limit_error('Unable to extract video data')

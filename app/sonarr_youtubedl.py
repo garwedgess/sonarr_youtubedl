@@ -14,7 +14,7 @@ import downloader
 import staging_manager as staging
 from sonarr_client import SonarrClient
 from notifier import Notifier
-from utils import escapetitle, checkconfig, offsethandler, setup_logging
+from utils import escapetitle, checkconfig, offsethandler, setup_logging, calculate_backoff, is_rate_limit_error
 
 import argparse
 
@@ -45,6 +45,7 @@ class SonarrYTDL:
             self._configure_ytdl(cfg)
             self._configure_paths(cfg)
             self._configure_staging()
+            self._configure_rate_limiting(cfg)
         except SystemExit:
             raise
         except Exception as e:
@@ -136,6 +137,18 @@ class SonarrYTDL:
                 )
             else:
                 logger.info("Staging not configured - downloads go directly to library")
+
+    def _configure_rate_limiting(self, cfg):
+        sonarrytdl = cfg['sonarrytdl']
+        self.rate_limit_sleep = int(sonarrytdl.get('rate_limit_sleep', 900))
+        self.backoff_multiplier = float(sonarrytdl.get('backoff_multiplier', 2.0))
+        self.backoff_max = int(sonarrytdl.get('backoff_max', 3600))
+        self.rate_limit_count = 0
+        self.current_backoff = self.rate_limit_sleep
+        logger.debug(
+            f"Rate limiting: initial={self.rate_limit_sleep}s "
+            f"multiplier={self.backoff_multiplier} max={self.backoff_max}s"
+        )
 
     def _parse_naming(self, res):
         if 'seasonFolderFormat' not in res or (
@@ -340,13 +353,38 @@ class SonarrYTDL:
                 debug=self.debug
             )
         except Exception as e:
-            logger.error(f"Download error: {eps['title']} - {e}")
+            error_msg = str(e)
+            if is_rate_limit_error(error_msg):
+                self.rate_limit_count += 1
+                self.current_backoff = calculate_backoff(
+                    self.rate_limit_count,
+                    self.rate_limit_sleep,
+                    self.backoff_multiplier,
+                    self.backoff_max
+                )
+                if self.rate_limit_count > 1:
+                    logger.warning(
+                        f"Rate limited (attempt {self.rate_limit_count}), "
+                        f"backing off {self.current_backoff}s "
+                        f"({self.current_backoff // 60}m {self.current_backoff % 60}s)"
+                    )
+                else:
+                    logger.warning(f"Rate limited, sleeping {self.current_backoff}s")
+                time.sleep(self.current_backoff)
+            else:
+                logger.error(f"Download error: {eps['title']} - {e}")
             return False
 
         if not success:
             return False
 
         self.notifier.notify_download_complete(ser['title'], eps['title'])
+
+        # Reset backoff on successful download
+        if self.rate_limit_count > 0:
+            logger.info("Rate limit recovered - resetting backoff")
+            self.rate_limit_count = 0
+            self.current_backoff = self.rate_limit_sleep
 
         if self.use_staging:
             staged = staging.find_file(ser['title'], number)
