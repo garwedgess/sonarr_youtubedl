@@ -12,7 +12,6 @@ CONFIGFILE = os.environ['CONFIGPATH']
 
 _APOS = "(['\u2019]?)"  # optional apostrophe pattern, used by escapetitle
 
-
 def redact_sensitive(data):
     """Redact sensitive information like API keys and cookie paths from log data.
     Safe to use on yt-dlp opts dicts before logging.
