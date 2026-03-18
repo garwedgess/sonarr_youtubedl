@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-cov rapidfuzz pyyaml requests
+          pip install pytest pytest-cov rapidfuzz pyyaml requests schedule
 
       - name: Run tests
         env:

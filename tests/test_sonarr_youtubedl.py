@@ -7,6 +7,11 @@ from unittest.mock import patch, MagicMock, call
 
 os.environ.setdefault('CONFIGPATH', '/config/config.yml')
 
+# Stub modules not available in CI test environment
+for _stub in ['yt_dlp', 'schedule']:
+    if _stub not in sys.modules:
+        sys.modules[_stub] = MagicMock()
+
 # ---------------------------------------------------------------------------
 # Stub out modules that require Docker/yt-dlp/network at import time
 # ---------------------------------------------------------------------------

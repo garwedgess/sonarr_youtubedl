@@ -7,6 +7,10 @@ from unittest.mock import patch, MagicMock
 os.environ.setdefault('CONFIGPATH', '/config/config.yml')
 sys.path.insert(0, os.path.dirname(__file__))
 
+# Stub yt_dlp if not installed (CI environment)
+if 'yt_dlp' not in sys.modules:
+    sys.modules['yt_dlp'] = MagicMock()
+
 # Force import of the real downloader module regardless of test execution order.
 # test_sonarr_youtubedl.py stubs sys.modules['downloader'] at collection time,
 # which would cause all yt_dlp patches to fail with AttributeError.
