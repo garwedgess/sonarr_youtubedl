@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/garwedgess/sonarr_youtubedl/compare/v1.0.0...v1.0.1) (2026-03-18)
+
+
+### Bug Fixes
+
+* architecture-aware Node.js install for multi-platform docker builds ([265991c](https://github.com/garwedgess/sonarr_youtubedl/commit/265991c6187a07accb31af6a44cdb42d7b22bba8))
+
 ## 1.0.0 (2026-03-18)
 
 
