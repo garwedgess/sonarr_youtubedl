@@ -1,6 +1,10 @@
 sonarrytdl:
     scan_interval: 60  # minutes between scans. Warning logged if below 10.
     debug: False       # set to True for verbose output
+    # Rate limiting — optional, defaults shown
+    # rate_limit_sleep: 900     # base sleep in seconds on first rate limit hit (default 15 minutes)
+    # backoff_multiplier: 2.0   # multiplier applied on each subsequent hit (default doubles each time)
+    # backoff_max: 3600         # maximum sleep cap in seconds (default 1 hour)
 
 sonarr:
     host: 192.168.1.123

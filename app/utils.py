@@ -10,49 +10,101 @@ from rapidfuzz import fuzz
 
 CONFIGFILE = os.environ['CONFIGPATH']
 
+_APOS = "(['\u2019]?)"  # optional apostrophe pattern, used by escapetitle
 
-def upperescape(string):
-    """Uppercase and Escape string. Used to help with YT-DL regex match.
+
+def redact_sensitive(data):
+    """Redact sensitive information like API keys and cookie paths from log data.
+    Safe to use on yt-dlp opts dicts before logging.
+
+    - ``data``: dict, list, or str to redact
+
+    returns:
+        redacted copy of data
+    """
+    if isinstance(data, dict):
+        sensitive_keys = ('apikey', 'api_key', 'cookie', 'cookies', 'cookiefile', 'cookies_file', 'password', 'token')
+        return {
+            k: '***REDACTED***' if any(s in k.lower() for s in sensitive_keys)
+            else redact_sensitive(v) if isinstance(v, (dict, list))
+            else v
+            for k, v in data.items()
+        }
+    elif isinstance(data, list):
+        return [redact_sensitive(item) for item in data]
+    elif isinstance(data, str):
+        data = re.sub(r'(apikey=)[^&\s]+', r'\1***REDACTED***', data)
+        data = re.sub(r'(apikey["\']?\s*:\s*["\']?)[^&\s,}"\']+', r'\1***REDACTED***', data)
+        return data
+    return data
+
+def escapetitle(string):
+    """Escape string for use as a case-insensitive regex match pattern.
+    Intended for matching episode titles against YouTube playlist entries.
+    Uses re.IGNORECASE at the call site - do not uppercase here.
+
     - ``string``: string to manipulate
 
     returns:
         ``string``: str new string
     """
-    # UPPERCASE as YTDL is case insensitive for ease.
-    string = string.upper()
-    # Remove quote characters as YTDL converts these.
-    string = string.replace('\u2018', "'")  # left single quote → straight
-    string = string.replace('\u2019', "'")  # right single quote / curly apostrophe → straight
-    string = string.replace('"', '"')
-    string = string.replace('"', '"')
-    # Replace >1 space with single space
-    string = re.sub(" +", " ", string)
-    # Escape the characters
+    # Normalise unicode quotes to their straight equivalents
+    string = string.replace('\u2018', "'")   # left single quote -> straight
+    string = string.replace('\u2019', "'")   # right single quote / curly apostrophe -> straight
+    string = string.replace('\u201c', '"')   # left double quote -> straight
+    string = string.replace('\u201d', '"')   # right double quote -> straight
+    # Collapse multiple spaces to one
+    string = re.sub(' +', ' ', string)
+    # Escape regex special characters
     string = re.escape(string)
-    # Handle none to multiple spaces
-    string = string.replace("\\ ", "[\\ ]*")
+    # AND/& substitution - must happen before space conversion
+    # After re.escape, spaces are '\\ ' so we target '\\ and\\ ' / '\\ AND\\ '
+    string = re.sub(r'\\ (and|AND)\\ ', r'\\ (and|AND|&)\\ ', string)
+    # Make double quotes optional (normalised above, still may appear)
+    string = string.replace('"', '(["]*)')
     # Make parenthesis optional
     string = string.replace("\\(", "([\\(]?")
     string = string.replace("\\)", "[\\)]?)?")
-    # Make it look for and as whole or ampersands
-    string = string.replace('\\ AND\\ ', '\\ (AND|&)\\ ')
-    # Make punctuation optional for human error
-    string = string.replace("'", "(['\u2019]?)")  # optional apostrophe (straight or curly)
-    string = string.replace(",", "([,]?)")         # optional comma
-    string = string.replace("!", "([!]?)")         # optional exclamation mark
-    string = string.replace("\\.", "([\\.]?)")     # optional period
-    string = string.replace("\\?", "([\\?]?)")    # optional question mark
-    string = string.replace(":", "([:]?)")         # optional colon
-    string = re.sub("S\\\\", "(['\u2019]?)" + "S\\\\", string)  # optional belonging apostrophe (straight or curly)
+    # Make source punctuation optional
+    string = string.replace("'", _APOS)         # optional apostrophe (straight or curly)
+    string = string.replace(",", "([,]?)")       # optional comma
+    string = string.replace("!", "([!]?)")       # optional exclamation mark
+    string = string.replace("\\.", "([\\.]?)")   # optional period
+    string = string.replace("\\?", "([\\?]?)")  # optional question mark
+    string = string.replace(":", "([:]?)")       # optional colon
+    # Space conversion LAST - also allows optional punctuation before each gap
+    # so candidates with extra punctuation the source title lacks still match
+    string = string.replace('\\ ', "[\\.,!?'\u2019:]*[\\ ]*")
     return string
 
 
+# Backwards compatibility alias - upperescape no longer uppercases.
+# re.IGNORECASE is used at the call site instead.
+upperescape = escapetitle
+
+
+def find_best_match_index(titles, name):
+    """Return the index of the best fuzzy match for name in titles.
+    Both name and titles are lowercased before comparison so matching
+    is case-insensitive regardless of how the caller normalises strings.
+    Returns -1 if titles is empty.
+    """
+    best_match_index = -1
+    best_match_score = -1
+    name_lower = name.lower()
+    for i, title in enumerate(titles):
+        score = fuzz.ratio(name_lower, title.lower())
+        if score > best_match_score:
+            best_match_index = i
+            best_match_score = score
+    return best_match_index
+
+
 def checkconfig():
-    """Checks if config files exist in config path
-    If no config available, will copy template to config folder and exit script
+    """Checks if config files exist in config path.
+    If no config available, will copy template to config folder and exit script.
 
     returns:
-
         `cfg`: dict containing configuration values
     """
     logger = logging.getLogger('sonarr_youtubedl')
@@ -68,21 +120,15 @@ def checkconfig():
         sys.exit()
     else:
         logger.info('Configuration Found. Loading file.')
-        with open(
-            config_file,
-            "r"
-        ) as ymlfile:
-            cfg = yaml.load(
-                ymlfile,
-                Loader=yaml.BaseLoader
-            )
+        with open(config_file, "r") as ymlfile:
+            cfg = yaml.load(ymlfile, Loader=yaml.BaseLoader)
         return cfg
 
 
 def offsethandler(airdate, offset):
-    """Adjusts an episodes airdate
-    - ``airdate``: Airdate from sonarr # (datetime)
-    - ``offset``: Offset from series config.yml # (dict)
+    """Adjusts an episodes airdate.
+    - ``airdate``: Airdate from sonarr (datetime)
+    - ``offset``: Offset from series config.yml (dict)
 
     returns:
         ``airdate``: datetime updated original airdate
@@ -137,29 +183,24 @@ def ytdl_hooks(d):
         file_tuple = os.path.split(os.path.abspath(d['filename']))
         logger.info("      Downloaded - {}".format(file_tuple[1]))
 
+
 def setup_logging(lf_enabled=True, lc_enabled=True, debugging=False):
-    log_level = logging.INFO
-    log_level = logging.DEBUG if debugging is True else log_level
+    log_level = logging.DEBUG if debugging else logging.INFO
     logger = logging.getLogger('sonarr_youtubedl')
     logger.setLevel(log_level)
     log_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
     if lf_enabled:
-        # setup logfile
-        log_file = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'logs'))
-        log_file = os.path.abspath(log_file + '/sonarr_youtubedl.log')
-        loggerfile = RotatingFileHandler(
-            log_file,
-            maxBytes=5000000,
-            backupCount=5
-        )
+        log_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'logs'))
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, 'sonarr_youtubedl.log')
+        loggerfile = RotatingFileHandler(log_file, maxBytes=5000000, backupCount=5)
         loggerfile.setLevel(log_level)
         loggerfile.set_name('FileHandler')
         loggerfile.setFormatter(log_format)
         logger.addHandler(loggerfile)
 
     if lc_enabled:
-        # setup console log
         loggerconsole = logging.StreamHandler(sys.stdout)
         loggerconsole.setLevel(log_level)
         loggerconsole.set_name('StreamHandler')
@@ -168,13 +209,34 @@ def setup_logging(lf_enabled=True, lc_enabled=True, debugging=False):
 
     return logger
 
-def find_best_match_index(titles, name):
-    best_match_index = -1
-    best_match_score = -1
-    for i, title in enumerate(titles):
-        score = fuzz.ratio(name, title)
-        if score > best_match_score:
-            best_match_index = i
-            best_match_score = score
-    return best_match_index
-    
+
+
+def calculate_backoff(rate_limit_count, rate_limit_sleep, multiplier, max_backoff):
+    """Calculate the backoff duration for a rate limit hit.
+
+    - ``rate_limit_count``: number of consecutive rate limit hits (already incremented)
+    - ``rate_limit_sleep``: base sleep duration in seconds
+    - ``multiplier``: exponential backoff multiplier
+    - ``max_backoff``: maximum backoff duration in seconds
+
+    returns:
+        ``int``: seconds to sleep
+    """
+    if rate_limit_count <= 1:
+        return rate_limit_sleep
+    return min(
+        int(rate_limit_sleep * (multiplier ** (rate_limit_count - 1))),
+        max_backoff
+    )
+
+
+def is_rate_limit_error(error_msg):
+    """Returns True if the error message indicates a YouTube rate limit.
+
+    - ``error_msg``: string error message to check
+
+    returns:
+        ``bool``
+    """
+    lower = error_msg.lower()
+    return any(x in lower for x in ('rate-limited', 'rate limit', 'try again later'))
