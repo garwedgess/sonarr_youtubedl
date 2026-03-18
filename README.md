@@ -1,4 +1,5 @@
 # sonarr_youtubedl by [@garwedgess](https://github.com/garwedgess)
+![CI](https://github.com/garwedgess/sonarr_youtubedl/actions/workflows/build.yml/badge.svg)
 
 > Originally forked from [@whatdaybob](https://github.com/whatdaybob/sonarr_youtubedl)
 
@@ -14,6 +15,7 @@
 - Per-series configuration: custom format, cookies, subtitles, time offsets, regex title cleanup, scan intervals
 - Duplicate file protection - skips downloads if file already exists in library or staging
 - Optional staging directory for clean separation between downloads and media library
+- Automatic exponential backoff on YouTube rate limiting
 
 ## How it works
 
@@ -29,7 +31,9 @@
 | Architecture | Tag |
 | :---: | --- |
 | x86-64 | latest |
+| arm64 | latest |
 | x86-64 | dev |
+| arm64 | dev |
 
 ## Getting Started
 
@@ -162,6 +166,21 @@ telegram:
 
 To find your `chat_id`, message your bot then visit:
 `api.telegram.org/bot<your_token>/getUpdates`
+
+## Rate Limiting
+
+If YouTube rate limits a download, the script automatically sleeps and retries with exponential backoff. No configuration is required - sensible defaults are used out of the box.
+
+To tune the behaviour, add these optional values under `sonarrytdl`:
+
+```yaml
+sonarrytdl:
+  rate_limit_sleep: 900     # base sleep in seconds on first rate limit hit (default 15 minutes)
+  backoff_multiplier: 2.0   # multiplier applied on each subsequent hit (default doubles each time)
+  backoff_max: 3600         # maximum sleep cap in seconds (default 1 hour)
+```
+
+With the defaults, consecutive hits sleep for 15m → 30m → 60m → 60m (capped). The counter resets automatically after a successful download.
 
 ## Series options
 
