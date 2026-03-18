@@ -252,3 +252,124 @@ class TestOffsethandler:
     def test_zero_offset_unchanged(self):
         base = datetime.datetime(2024, 1, 1, 12, 0, 0)
         assert offsethandler(base, {'days': '0', 'hours': '0'}) == base
+
+
+# ---------------------------------------------------------------------------
+# redact_sensitive
+# ---------------------------------------------------------------------------
+
+class TestRedactSensitive:
+
+    # --- Dict: sensitive keys redacted ---
+
+    def test_apikey_redacted(self):
+        from utils import redact_sensitive
+        result = redact_sensitive({'apikey': 'secret123', 'format': 'bestvideo'})
+        assert result['apikey'] == '***REDACTED***'
+        assert result['format'] == 'bestvideo'
+
+    def test_api_key_underscore_redacted(self):
+        from utils import redact_sensitive
+        result = redact_sensitive({'api_key': 'secret123'})
+        assert result['api_key'] == '***REDACTED***'
+
+    def test_cookiefile_redacted(self):
+        from utils import redact_sensitive
+        result = redact_sensitive({'cookiefile': '/config/cookies.txt', 'quiet': True})
+        assert result['cookiefile'] == '***REDACTED***'
+        assert result['quiet'] is True
+
+    def test_cookies_file_redacted(self):
+        from utils import redact_sensitive
+        assert redact_sensitive({'cookies_file': '/config/cookies.txt'})['cookies_file'] == '***REDACTED***'
+
+    def test_password_redacted(self):
+        from utils import redact_sensitive
+        assert redact_sensitive({'password': 'hunter2'})['password'] == '***REDACTED***'
+
+    def test_token_redacted(self):
+        from utils import redact_sensitive
+        assert redact_sensitive({'token': 'abc123'})['token'] == '***REDACTED***'
+
+    def test_non_sensitive_keys_preserved(self):
+        from utils import redact_sensitive
+        data = {'format': 'bestvideo', 'quiet': True, 'noplaylist': True}
+        assert redact_sensitive(data) == data
+
+    def test_case_insensitive_key_matching(self):
+        from utils import redact_sensitive
+        assert redact_sensitive({'ApiKey': 'secret'})['ApiKey'] == '***REDACTED***'
+        assert redact_sensitive({'APIKEY': 'secret'})['APIKEY'] == '***REDACTED***'
+
+    # --- Dict: nested ---
+
+    def test_nested_dict_sensitive_key_redacted(self):
+        from utils import redact_sensitive
+        result = redact_sensitive({
+            'format': 'bestvideo',
+            'extractor_args': {'youtubepot': {'token': 'secret'}}
+        })
+        assert result['extractor_args']['youtubepot']['token'] == '***REDACTED***'
+        assert result['format'] == 'bestvideo'
+
+    def test_nested_dict_non_sensitive_preserved(self):
+        from utils import redact_sensitive
+        result = redact_sensitive({
+            'extractor_args': {'youtubepot': {'server_home': ['/root/bgutil']}}
+        })
+        assert result['extractor_args']['youtubepot']['server_home'] == ['/root/bgutil']
+
+    # --- List ---
+
+    def test_list_of_dicts(self):
+        from utils import redact_sensitive
+        result = redact_sensitive([
+            {'apikey': 'secret', 'format': 'best'},
+            {'format': 'worst'},
+        ])
+        assert result[0]['apikey'] == '***REDACTED***'
+        assert result[0]['format'] == 'best'
+        assert result[1]['format'] == 'worst'
+
+    def test_list_of_strings_preserved(self):
+        from utils import redact_sensitive
+        assert redact_sensitive(['bestvideo', 'bestaudio']) == ['bestvideo', 'bestaudio']
+
+    # --- String ---
+
+    def test_apikey_in_url_redacted(self):
+        from utils import redact_sensitive
+        url = 'http://sonarr:8989/api?apikey=mysecretkey&seriesId=1'
+        result = redact_sensitive(url)
+        assert '***REDACTED***' in result
+        assert 'mysecretkey' not in result
+        assert 'seriesId=1' in result
+
+    def test_apikey_at_end_of_url(self):
+        from utils import redact_sensitive
+        url = 'http://sonarr:8989/api?seriesId=1&apikey=mysecretkey'
+        assert 'mysecretkey' not in redact_sensitive(url)
+
+    def test_plain_string_unchanged(self):
+        from utils import redact_sensitive
+        s = 'bestvideo+bestaudio/best'
+        assert redact_sensitive(s) == s
+
+    # --- Edge cases ---
+
+    def test_empty_dict(self):
+        from utils import redact_sensitive
+        assert redact_sensitive({}) == {}
+
+    def test_empty_list(self):
+        from utils import redact_sensitive
+        assert redact_sensitive([]) == []
+
+    def test_empty_string(self):
+        from utils import redact_sensitive
+        assert redact_sensitive('') == ''
+
+    def test_non_string_value_preserved(self):
+        from utils import redact_sensitive
+        assert redact_sensitive(42) == 42
+        assert redact_sensitive(True) is True

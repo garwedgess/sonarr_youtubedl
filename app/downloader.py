@@ -1,7 +1,7 @@
 import logging
 import re
 import yt_dlp
-from utils import upperescape, find_best_match_index, YoutubeDLLogger, ytdl_hooks, ytdl_hooks_debug
+from utils import escapetitle, find_best_match_index, YoutubeDLLogger, ytdl_hooks, ytdl_hooks_debug, redact_sensitive
 
 logger = logging.getLogger('sonarr_youtubedl')
 
@@ -42,6 +42,8 @@ def search(playlist_url, series_title, episode_title, playlistreverse, cookies=N
         opts.update(extra_args)
     opts.update(_pot_args())
 
+    logger.debug(f"Search opts: {redact_sensitive(opts)}")
+
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             result = ydl.extract_info(playlist_url, download=False)
@@ -60,8 +62,8 @@ def search(playlist_url, series_title, episode_title, playlistreverse, cookies=N
     if not entries:
         return None
 
-    regextitle = upperescape(episode_title)
-    logger.debug(f"matchtitle regex: {regextitle}")
+    regextitle = escapetitle(episode_title)
+    logger.debug(f"Match regex: {regextitle}")
 
     filtered = [e for e in entries if re.search(regextitle, e.get('title', ''), re.IGNORECASE)]
     if filtered:
@@ -108,6 +110,8 @@ def download(url, outtmpl, quality_format, cookies=None, extra_args=None, subtit
             ],
         })
     opts.update(_pot_args())
+
+    logger.debug(f"Download opts: {redact_sensitive(opts)}")
 
     try:
         yt_dlp.YoutubeDL(opts).download([url])

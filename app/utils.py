@@ -12,7 +12,30 @@ CONFIGFILE = os.environ['CONFIGPATH']
 
 _APOS = "(['\u2019]?)"  # optional apostrophe pattern, used by escapetitle
 
+def redact_sensitive(data):
+    """Redact sensitive information like API keys and cookie paths from log data.
+    Safe to use on yt-dlp opts dicts before logging.
 
+    - ``data``: dict, list, or str to redact
+
+    returns:
+        redacted copy of data
+    """
+    if isinstance(data, dict):
+        sensitive_keys = ('apikey', 'api_key', 'cookie', 'cookies', 'cookiefile', 'cookies_file', 'password', 'token')
+        return {
+            k: '***REDACTED***' if any(s in k.lower() for s in sensitive_keys)
+            else redact_sensitive(v) if isinstance(v, (dict, list))
+            else v
+            for k, v in data.items()
+        }
+    elif isinstance(data, list):
+        return [redact_sensitive(item) for item in data]
+    elif isinstance(data, str):
+        data = re.sub(r'(apikey=)[^&\s]+', r'\1***REDACTED***', data)
+        data = re.sub(r'(apikey["\']?\s*:\s*["\']?)[^&\s,}"\']+', r'\1***REDACTED***', data)
+        return data
+    return data
 
 def escapetitle(string):
     """Escape string for use as a case-insensitive regex match pattern.
