@@ -14,7 +14,7 @@ import downloader
 import staging_manager as staging
 from sonarr_client import SonarrClient
 from notifier import Notifier
-from utils import upperescape, checkconfig, offsethandler, setup_logging
+from utils import escapetitle, checkconfig, offsethandler, setup_logging
 
 import argparse
 
@@ -328,21 +328,25 @@ class SonarrYTDL:
         else:
             outtmpl = self._library_path(ser, eps)
 
-        self.notifier.notify_download_start(ser['title'], number, eps['title'])
-        success = downloader.download(
-            url=url,
-            outtmpl=outtmpl,
-            quality_format=quality,
-            cookies=ser.get('cookies_file'),
-            extra_args=self.ytdl_extra_args or None,
-            subtitles=subtitles,
-            debug=self.debug
-        )
-
-        if success:
-            self.notifier.notify_download_complete(ser['title'], number, eps['title'])
-        else:
+        self.notifier.notify_download_start(ser['title'], eps['title'])
+        try:
+            success = downloader.download(
+                url=url,
+                outtmpl=outtmpl,
+                quality_format=quality,
+                cookies=ser.get('cookies_file'),
+                extra_args=self.ytdl_extra_args or None,
+                subtitles=subtitles,
+                debug=self.debug
+            )
+        except Exception as e:
+            logger.error(f"Download error: {eps['title']} - {e}")
             return False
+
+        if not success:
+            return False
+
+        self.notifier.notify_download_complete(ser['title'], eps['title'])
 
         if self.use_staging:
             staged = staging.find_file(ser['title'], number)
