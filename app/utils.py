@@ -12,6 +12,7 @@ CONFIGFILE = os.environ['CONFIGPATH']
 
 _APOS = "(['\u2019]?)"  # optional apostrophe pattern, used by escapetitle
 
+
 def redact_sensitive(data):
     """Redact sensitive information like API keys and cookie paths from log data.
     Safe to use on yt-dlp opts dicts before logging.
@@ -207,3 +208,35 @@ def setup_logging(lf_enabled=True, lc_enabled=True, debugging=False):
         logger.addHandler(loggerconsole)
 
     return logger
+
+
+
+def calculate_backoff(rate_limit_count, rate_limit_sleep, multiplier, max_backoff):
+    """Calculate the backoff duration for a rate limit hit.
+
+    - ``rate_limit_count``: number of consecutive rate limit hits (already incremented)
+    - ``rate_limit_sleep``: base sleep duration in seconds
+    - ``multiplier``: exponential backoff multiplier
+    - ``max_backoff``: maximum backoff duration in seconds
+
+    returns:
+        ``int``: seconds to sleep
+    """
+    if rate_limit_count <= 1:
+        return rate_limit_sleep
+    return min(
+        int(rate_limit_sleep * (multiplier ** (rate_limit_count - 1))),
+        max_backoff
+    )
+
+
+def is_rate_limit_error(error_msg):
+    """Returns True if the error message indicates a YouTube rate limit.
+
+    - ``error_msg``: string error message to check
+
+    returns:
+        ``bool``
+    """
+    lower = error_msg.lower()
+    return any(x in lower for x in ('rate-limited', 'rate limit', 'try again later'))
