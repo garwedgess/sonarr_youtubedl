@@ -3,6 +3,7 @@ import datetime
 import pytest
 import sys
 import os
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -486,3 +487,101 @@ class TestIsRateLimitError:
     def test_unrelated_error(self):
         from utils import is_rate_limit_error
         assert not is_rate_limit_error('Unable to extract video data')
+
+
+# ---------------------------------------------------------------------------
+# YoutubeDLLogger
+# ---------------------------------------------------------------------------
+
+class TestYoutubeDLLogger:
+
+    def setup_method(self):
+        from utils import YoutubeDLLogger
+        self.ydl_logger = YoutubeDLLogger()
+
+    def test_info_delegates_to_logger(self):
+        with patch('utils.logging.getLogger') as mock_get:
+            from utils import YoutubeDLLogger
+            logger = YoutubeDLLogger()
+            logger.info('test info')
+            mock_get.return_value.info.assert_called_once_with('test info')
+
+    def test_debug_delegates_to_logger(self):
+        with patch('utils.logging.getLogger') as mock_get:
+            from utils import YoutubeDLLogger
+            logger = YoutubeDLLogger()
+            logger.debug('test debug')
+            mock_get.return_value.debug.assert_called_once_with('test debug')
+
+    def test_warning_delegates_to_logger(self):
+        with patch('utils.logging.getLogger') as mock_get:
+            from utils import YoutubeDLLogger
+            logger = YoutubeDLLogger()
+            logger.warning('test warning')
+            mock_get.return_value.warning.assert_called_once_with('test warning')
+
+    def test_error_delegates_to_logger(self):
+        with patch('utils.logging.getLogger') as mock_get:
+            from utils import YoutubeDLLogger
+            logger = YoutubeDLLogger()
+            logger.error('test error')
+            mock_get.return_value.error.assert_called_once_with('test error')
+
+
+# ---------------------------------------------------------------------------
+# ytdl_hooks_debug
+# ---------------------------------------------------------------------------
+
+class TestYtdlHooksDebug:
+
+    def test_finished_logs_filename(self):
+        from utils import ytdl_hooks_debug
+        d = {'status': 'finished', 'filename': '/sonarr_root/Ms Rachel/Season 1/episode.mkv'}
+        with patch('utils.logging.getLogger') as mock_get:
+            ytdl_hooks_debug(d)
+        logged = mock_get.return_value.info.call_args[0][0]
+        assert 'episode.mkv' in logged
+
+    def test_downloading_logs_progress(self):
+        from utils import ytdl_hooks_debug
+        d = {
+            'status': 'downloading',
+            'filename': '/sonarr_root/episode.mkv',
+            '_percent_str': '50%',
+            '_eta_str': '30s',
+        }
+        with patch('utils.logging.getLogger') as mock_get:
+            ytdl_hooks_debug(d)
+        logged = mock_get.return_value.debug.call_args[0][0]
+        assert '50%' in logged
+        assert '30s' in logged
+
+    def test_other_status_does_nothing(self):
+        from utils import ytdl_hooks_debug
+        d = {'status': 'error'}
+        with patch('utils.logging.getLogger') as mock_get:
+            ytdl_hooks_debug(d)
+        mock_get.return_value.info.assert_not_called()
+        mock_get.return_value.debug.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# ytdl_hooks
+# ---------------------------------------------------------------------------
+
+class TestYtdlHooks:
+
+    def test_finished_logs_filename(self):
+        from utils import ytdl_hooks
+        d = {'status': 'finished', 'filename': '/sonarr_root/Ms Rachel/Season 1/episode.mkv'}
+        with patch('utils.logging.getLogger') as mock_get:
+            ytdl_hooks(d)
+        logged = mock_get.return_value.info.call_args[0][0]
+        assert 'episode.mkv' in logged
+
+    def test_other_status_does_nothing(self):
+        from utils import ytdl_hooks
+        d = {'status': 'downloading', 'filename': '/sonarr_root/episode.mkv'}
+        with patch('utils.logging.getLogger') as mock_get:
+            ytdl_hooks(d)
+        mock_get.return_value.info.assert_not_called()
