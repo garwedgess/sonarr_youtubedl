@@ -254,6 +254,18 @@ class SonarrYTDL:
             if 'offset' in cfg:
                 ser['offset'] = cfg['offset']
 
+            if 'extra_args' in cfg:
+                parsed = {}
+                for key, value in cfg['extra_args'].items():
+                    if str(value).lower() in ('true', 'false'):
+                        parsed[key] = str(value).lower() == 'true'
+                    else:
+                        try:
+                            parsed[key] = int(value)
+                        except (ValueError, TypeError):
+                            parsed[key] = value
+                ser['extra_args'] = parsed
+
             if not ser['monitored']:
                 logger.warning(f"{ser['title']} is not monitored")
 
@@ -323,13 +335,15 @@ class SonarrYTDL:
         if 'site_regex' in ser:
             episode_title = re.sub(ser['site_regex']['match'], ser['site_regex']['replace'], episode_title)
 
+        extra_args = {**self.ytdl_extra_args, **ser.get('extra_args', {})}
+
         url = downloader.search(
             playlist_url=ser['url'],
             series_title=ser['title'],
             episode_title=episode_title,
             playlistreverse=ser['playlistreverse'],
             cookies=ser.get('cookies_file'),
-            extra_args=self.ytdl_extra_args or None,
+            extra_args=extra_args or None,
             debug=self.debug
         )
 
@@ -353,7 +367,7 @@ class SonarrYTDL:
                 outtmpl=outtmpl,
                 quality_format=quality,
                 cookies=ser.get('cookies_file'),
-                extra_args=self.ytdl_extra_args or None,
+                extra_args=extra_args or None,
                 subtitles=subtitles,
                 debug=self.debug
             )

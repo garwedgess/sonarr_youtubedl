@@ -1,3 +1,4 @@
+import copy
 import datetime
 import os
 import sys
@@ -92,8 +93,8 @@ def make_sonarr_client(series=None, episodes=None, naming=None):
     """Return a mock SonarrClient with sensible defaults."""
     mock = MagicMock()
     mock.get_naming_config.return_value = naming or NAMING
-    mock.get_series.return_value = series if series is not None else SONARR_SERIES
-    mock.get_episodes.return_value = episodes if episodes is not None else []
+    mock.get_series.return_value = copy.deepcopy(series if series is not None else SONARR_SERIES)
+    mock.get_episodes.return_value = copy.deepcopy(episodes if episodes is not None else [])
     mock.get_quality_profile.return_value = QUALITY_PROFILE
     return mock
 
@@ -372,6 +373,43 @@ class TestDownloadEpisode:
         assert result is True
         mock_sonarr.refresh.assert_called_once()
         mock_sonarr.rescan.assert_called_once()
+
+    def test_per_series_extra_args_override_global(self):
+        client, _ = self._make()
+        client.ytdl_extra_args = {'playlistend': 20, 'socket_timeout': 30}
+        ser = self._ser(extra_args={'playlistend': 5})
+        with patch('sonarr_youtubedl.downloader') as mock_dl, \
+             patch.object(client, '_library_file_exists', return_value=False):
+            mock_dl.search.return_value = None
+            client._download_episode(ser, self._eps())
+        called_args = mock_dl.search.call_args[1]['extra_args']
+        assert called_args['playlistend'] == 5
+        assert called_args['socket_timeout'] == 30
+
+    def test_global_extra_args_used_when_no_series_override(self):
+        client, _ = self._make()
+        client.ytdl_extra_args = {'socket_timeout': 30}
+        ser = self._ser()
+        with patch('sonarr_youtubedl.downloader') as mock_dl, \
+             patch.object(client, '_library_file_exists', return_value=False):
+            mock_dl.search.return_value = None
+            client._download_episode(ser, self._eps())
+        called_args = mock_dl.search.call_args[1]['extra_args']
+        assert called_args['socket_timeout'] == 30
+
+    def test_merged_extra_args_passed_to_download(self):
+        client, mock_sonarr = self._make()
+        client.ytdl_extra_args = {'socket_timeout': 30}
+        ser = self._ser(extra_args={'playlistend': 5})
+        with patch('sonarr_youtubedl.downloader') as mock_dl, \
+             patch.object(client, '_library_file_exists', return_value=False), \
+             patch('sonarr_youtubedl.time.sleep'):
+            mock_dl.search.return_value = 'https://youtube.com/watch?v=123'
+            mock_dl.download.return_value = True
+            client._download_episode(ser, self._eps())
+        called_args = mock_dl.download.call_args[1]['extra_args']
+        assert called_args['playlistend'] == 5
+        assert called_args['socket_timeout'] == 30
 
     def test_download_failure_returns_false(self):
         client, _ = self._make()
@@ -970,6 +1008,37 @@ class TestFilterseriesAdditional:
         client, _ = make_client(cfg=cfg)
         result = client.filterseries()
         assert result[0]['site_regex'] == {'match': r'^Ms Rachel - ', 'replace': ''}
+
+    def test_per_series_extra_args_parsed(self):
+        cfg = {**CFG, 'series': [{
+            'title': 'Ms Rachel',
+            'url': 'https://youtube.com/channel/msrachel',
+            'extra_args': {'playlistend': '10', 'sponsorblock_remove': 'sponsor'},
+        }]}
+        client, _ = make_client(cfg=cfg)
+        result = client.filterseries()
+        assert result[0]['extra_args']['playlistend'] == 10
+        assert result[0]['extra_args']['sponsorblock_remove'] == 'sponsor'
+
+    def test_per_series_extra_args_bool_parsed(self):
+        cfg = {**CFG, 'series': [{
+            'title': 'Ms Rachel',
+            'url': 'https://youtube.com/channel/msrachel',
+            'extra_args': {'noplaylist': 'true'},
+        }]}
+        client, _ = make_client(cfg=cfg)
+        result = client.filterseries()
+        assert result[0]['extra_args']['noplaylist'] is True
+
+    def test_per_series_extra_args_not_set_when_absent(self):
+        cfg = {**CFG, 'series': [{
+            'title': 'Ms Rachel',
+            'url': 'https://youtube.com/channel/msrachel',
+        }]}
+        client, _ = make_client(cfg=cfg)
+        result = client.filterseries()
+        assert 'extra_args' not in result[0]
+
 
 
 # ---------------------------------------------------------------------------
