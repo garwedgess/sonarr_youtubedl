@@ -12,7 +12,7 @@
 - Fuzzy title matching with regex pre-filter - handles title mismatches between TVDB and YouTube
 - PO token support via [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider) for authenticated YouTube access
 - Telegram notifications on download start and completion
-- Per-series configuration: custom format, cookies, subtitles, time offsets, regex title cleanup, scan intervals
+- Per-series configuration: custom format, cookies, subtitles, time offsets, regex title cleanup, scan intervals, yt-dlp options
 - Duplicate file protection - skips downloads if file already exists in library or staging
 - Optional staging directory for clean separation between downloads and media library
 - Automatic exponential backoff on YouTube rate limiting
@@ -193,6 +193,7 @@ With the defaults, consecutive hits sleep for 15m → 30m → 60m → 60m (cappe
 | `min_check_interval` | Minimum minutes between yt-dlp scans for this series. Sonarr is still polled every `scan_interval`. |
 | `offset` | Time offset for pre-release episodes e.g. `days: 2, hours: 3` |
 | `subtitles` | Download and embed subtitles. See template for options. |
+| `extra_args` | Per-series yt-dlp options, merged over global `extra_args`. Series values take priority. |
 | `regex.sonarr` | Regex match/replace applied to the Sonarr episode title before matching |
 | `regex.site` | Regex match/replace applied to the YouTube search term independently |
 
@@ -208,3 +209,18 @@ regex:
     match: ' PT \d+'
     replace: ''
 ```
+
+## Per-series yt-dlp options
+
+Any yt-dlp option can be set per-series under `extra_args`, overriding the global value for that series only. Useful for limiting playlist scans on large channels or enabling SponsorBlock on specific series:
+
+```yaml
+series:
+  - title: Ms Rachel - Songs for Littles
+    url: https://www.youtube.com/channel/UCG2CL6EUjG8TVT1Tpl9nJdg/videos
+    extra_args:
+      playlistend: 20                                      # only scan 20 most recent videos
+      sponsorblock_remove: sponsor,selfpromo,interaction   # remove sponsor segments
+```
+
+See the [yt-dlp documentation](https://github.com/yt-dlp/yt-dlp) for all available options.
