@@ -204,6 +204,13 @@ class TestSearch:
 # TestDownload
 # ---------------------------------------------------------------------------
 
+    def test_best_match_exception_returns_none(self):
+        entries = make_entries('Ms Rachel - Colours')
+        with patch('downloader.yt_dlp.YoutubeDL', return_value=make_ydl_context({'entries': entries})),              patch('downloader.find_best_match_index', side_effect=Exception('match error')):
+            result = downloader.search(PLAYLIST_URL, 'Ms Rachel', 'Colours', True)
+        assert result is None
+
+
 class TestDownload:
 
     # --- Return values ---

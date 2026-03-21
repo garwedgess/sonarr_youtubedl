@@ -2,13 +2,10 @@ import re
 import os
 import sys
 import datetime
-import yaml
 import logging
 from logging.handlers import RotatingFileHandler
 from rapidfuzz import fuzz
 
-
-CONFIGFILE = os.environ['CONFIGPATH']
 
 _APOS = "(['\u2019]?)"  # optional apostrophe pattern, used by escapetitle
 
@@ -98,31 +95,6 @@ def find_best_match_index(titles, name):
             best_match_index = i
             best_match_score = score
     return best_match_index
-
-
-def checkconfig():
-    """Checks if config files exist in config path.
-    If no config available, will copy template to config folder and exit script.
-
-    returns:
-        `cfg`: dict containing configuration values
-    """
-    logger = logging.getLogger('sonarr_youtubedl')
-    config_template = os.path.abspath(CONFIGFILE + '.template')
-    config_template_exists = os.path.exists(os.path.abspath(config_template))
-    config_file = os.path.abspath(CONFIGFILE)
-    config_file_exists = os.path.exists(os.path.abspath(config_file))
-    if not config_file_exists:
-        logger.critical('Configuration file not found.')
-        if not config_template_exists:
-            os.system('cp /app/config.yml.template ' + config_template)
-        logger.critical("Create a config.yml using config.yml.template as an example.")
-        sys.exit()
-    else:
-        logger.info('Configuration Found. Loading file.')
-        with open(config_file, "r") as ymlfile:
-            cfg = yaml.load(ymlfile, Loader=yaml.BaseLoader)
-        return cfg
 
 
 def offsethandler(airdate, offset):
@@ -240,3 +212,9 @@ def is_rate_limit_error(error_msg):
     """
     lower = error_msg.lower()
     return any(x in lower for x in ('rate-limited', 'rate limit', 'try again later'))
+
+
+# Backwards compatibility — use config.load_config() instead
+def checkconfig():
+    from config import load_config
+    return load_config()

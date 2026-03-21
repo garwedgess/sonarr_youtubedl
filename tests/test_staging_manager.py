@@ -264,6 +264,16 @@ class TestFallback:
             staging_manager._fallback(client, staging_file, 'Season {season:02d}', '', str(tmp_path))
         assert any('Fallback move failed' in str(c) for c in mock_error.call_args_list)
 
+
+    def test_does_not_rescan_when_season_number_unparseable(self, tmp_path):
+        staging_dir = tmp_path / 'staging'
+        staging_dir.mkdir()
+        staging_file = make_staging_file(staging_dir, 'Ms Rachel - SxxE01.mkv')
+        client = make_client(series=[{'id': 1, 'title': 'Ms Rachel', 'path': '/tv/Ms Rachel'}])
+        staging_manager._fallback(client, staging_file, 'Season {season:02d}', '', str(tmp_path))
+        client.refresh.assert_not_called()
+        client.rescan.assert_not_called()
+
     def test_does_not_rescan_on_move_failure(self, tmp_path):
         staging_dir = tmp_path / 'staging'
         staging_dir.mkdir()

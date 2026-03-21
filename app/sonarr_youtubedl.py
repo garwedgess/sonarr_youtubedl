@@ -14,7 +14,8 @@ import downloader
 import staging_manager as staging
 from sonarr_client import SonarrClient
 from notifier import Notifier
-from utils import escapetitle, checkconfig, offsethandler, setup_logging, calculate_backoff, is_rate_limit_error
+from utils import escapetitle, offsethandler, setup_logging, calculate_backoff, is_rate_limit_error
+from config import load_config, validate_config
 
 import argparse
 
@@ -42,7 +43,8 @@ last_checked: dict[int, datetime] = {}
 class SonarrYTDL:
 
     def __init__(self):
-        cfg = checkconfig()
+        cfg = load_config()
+        validate_config(cfg)
 
         try:
             self._configure_logging(cfg)
@@ -59,10 +61,25 @@ class SonarrYTDL:
         self.series_config = cfg.get('series', [])
         self.client = SonarrClient(self.base_url, self.api_version, self.api_key)
 
+        self._check_sonarr_connection()
+
         res = self.client.get_naming_config()
         self._parse_naming(res)
         logger.debug(f"Number style: {self.number_style} folder: {self.season_format}")
         self.notifier = Notifier(cfg)
+
+    def _check_sonarr_connection(self):
+        try:
+            issues = self.client.get_health()
+            if issues:
+                for issue in issues:
+                    level = issue.get('type', 'unknown')
+                    message = issue.get('message', '')
+                    logger.warning(f"Sonarr health {level}: {message}")
+            else:
+                logger.info("Sonarr connection OK")
+        except Exception as e:
+            sys.exit(f"Cannot connect to Sonarr at {self.base_url}: {e}")
 
     def _configure_logging(self, cfg):
         global SCANINTERVAL
