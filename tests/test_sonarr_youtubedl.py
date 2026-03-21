@@ -102,8 +102,10 @@ def make_sonarr_client(series=None, episodes=None, naming=None):
 def make_client(cfg=None, series=None, episodes=None):
     """Construct a SonarrYTDL instance with mocked dependencies."""
     mock_sonarr = make_sonarr_client(series=series, episodes=episodes)
-    with patch('sonarr_youtubedl.checkconfig', return_value=cfg or CFG), \
+    with patch('sonarr_youtubedl.load_config', return_value=cfg or CFG), \
+         patch('sonarr_youtubedl.validate_config'), \
          patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
          patch('sonarr_youtubedl.Notifier', return_value=MagicMock()), \
          patch.object(_staging_module, 'is_available', return_value=False), \
          patch.object(_staging_module, 'ensure'), \
@@ -126,8 +128,47 @@ def make_episode(**kwargs):
 
 
 # ---------------------------------------------------------------------------
+# TestCheckSonarrConnection
+# ---------------------------------------------------------------------------
+
+class TestCheckSonarrConnection:
+
+    def test_logs_ok_when_healthy(self):
+        client, mock_sonarr = make_client()
+        mock_sonarr.get_health.return_value = []
+        with patch.object(client, 'client', mock_sonarr),              patch('sonarr_youtubedl.logger') as mock_log:
+            client._check_sonarr_connection()
+        assert any('OK' in str(c) for c in mock_log.info.call_args_list)
+
+    def test_logs_warning_for_each_issue(self):
+        client, mock_sonarr = make_client()
+        issues = [
+            {'type': 'warning', 'message': 'Indexer unavailable'},
+            {'type': 'error', 'message': 'Disk space low'},
+        ]
+        mock_sonarr.get_health.return_value = issues
+        with patch.object(client, 'client', mock_sonarr),              patch('sonarr_youtubedl.logger') as mock_log:
+            client._check_sonarr_connection()
+        assert mock_log.warning.call_count == 2
+
+    def test_exits_when_sonarr_unreachable(self):
+        client, mock_sonarr = make_client()
+        mock_sonarr.get_health.side_effect = Exception('Connection refused')
+        with patch.object(client, 'client', mock_sonarr),              pytest.raises(SystemExit):
+            client._check_sonarr_connection()
+
+    def test_continues_when_sonarr_has_warnings(self):
+        client, mock_sonarr = make_client()
+        mock_sonarr.get_health.return_value = [{'type': 'warning', 'message': 'Indexer unavailable'}]
+        with patch.object(client, 'client', mock_sonarr):
+            client._check_sonarr_connection()  # should not raise
+
+
+# ---------------------------------------------------------------------------
 # TestFilterseries
 # ---------------------------------------------------------------------------
+
+
 
 class TestFilterseries:
 
@@ -571,8 +612,10 @@ class TestConfigureLogging:
     def test_low_scan_interval_warning(self):
         cfg = {**CFG, 'sonarrytdl': {**CFG['sonarrytdl'], 'scan_interval': '5'}}
         mock_sonarr = make_sonarr_client()
-        with patch('sonarr_youtubedl.checkconfig', return_value=cfg), \
+        with patch('sonarr_youtubedl.load_config', return_value=cfg), \
+             patch('sonarr_youtubedl.validate_config'), \
              patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
              patch('sonarr_youtubedl.Notifier'), \
              patch('sonarr_youtubedl.logger') as mock_log:
             SonarrYTDL()
@@ -581,8 +624,10 @@ class TestConfigureLogging:
 
     def test_no_warning_for_normal_scan_interval(self):
         mock_sonarr = make_sonarr_client()
-        with patch('sonarr_youtubedl.checkconfig', return_value=CFG), \
+        with patch('sonarr_youtubedl.load_config', return_value=CFG), \
+             patch('sonarr_youtubedl.validate_config'), \
              patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
              patch('sonarr_youtubedl.Notifier'), \
              patch('sonarr_youtubedl.logger') as mock_log:
             SonarrYTDL()
@@ -698,8 +743,10 @@ class TestGetMissingEpisodesAdditional:
             series=[{'id': 1, 'title': 'Ms Rachel', 'path': '/tv', 'monitored': True, 'qualityProfileId': 5}],
             episodes=[{'id': 1, 'seriesId': 1, 'title': 'Ep1', 'monitored': True, 'hasFile': False, 'seasonNumber': 1, 'episodeNumber': 1}]
         )
-        with patch('sonarr_youtubedl.checkconfig', return_value=cfg), \
+        with patch('sonarr_youtubedl.load_config', return_value=cfg), \
+             patch('sonarr_youtubedl.validate_config'), \
              patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
              patch('sonarr_youtubedl.Notifier'):
             client = SonarrYTDL()
         client.sonarr = mock_sonarr
@@ -719,7 +766,8 @@ class TestConfigureInit:
 
     def test_configuration_error_exits(self):
         cfg = {**CFG, 'sonarr': {}}  # missing required keys
-        with patch('sonarr_youtubedl.checkconfig', return_value=cfg), \
+        with patch('sonarr_youtubedl.load_config', return_value=cfg), \
+             patch('sonarr_youtubedl.validate_config'), \
              patch('sonarr_youtubedl.SonarrClient'), \
              patch('sonarr_youtubedl.Notifier'):
             with pytest.raises(SystemExit):
@@ -778,8 +826,10 @@ class TestConfigureStaging:
     def test_staging_enabled_when_path_set_and_available(self):
         cfg = {**CFG, 'sonarr': {**CFG['sonarr'], 'staging_path': '/sonarr_staging'}}
         mock_sonarr = make_sonarr_client()
-        with patch('sonarr_youtubedl.checkconfig', return_value=cfg), \
+        with patch('sonarr_youtubedl.load_config', return_value=cfg), \
+             patch('sonarr_youtubedl.validate_config'), \
              patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
              patch('sonarr_youtubedl.Notifier', return_value=MagicMock()), \
              patch.object(_staging_module, 'is_available', return_value=True), \
              patch.object(_staging_module, 'ensure') as mock_ensure, \
@@ -794,8 +844,10 @@ class TestConfigureStaging:
     def test_staging_disabled_when_path_set_but_unavailable(self):
         cfg = {**CFG, 'sonarr': {**CFG['sonarr'], 'staging_path': '/sonarr_staging'}}
         mock_sonarr = make_sonarr_client()
-        with patch('sonarr_youtubedl.checkconfig', return_value=cfg), \
+        with patch('sonarr_youtubedl.load_config', return_value=cfg), \
+             patch('sonarr_youtubedl.validate_config'), \
              patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
              patch('sonarr_youtubedl.Notifier', return_value=MagicMock()), \
              patch.object(_staging_module, 'is_available', return_value=False), \
              patch.object(_staging_module, 'ensure'), \
@@ -866,8 +918,10 @@ class TestDownloadEpisodeStaging:
     def _make_staging_client(self):
         cfg = {**CFG, 'sonarr': {**CFG['sonarr'], 'staging_path': '/sonarr_staging'}}
         mock_sonarr = make_sonarr_client()
-        with patch('sonarr_youtubedl.checkconfig', return_value=cfg), \
+        with patch('sonarr_youtubedl.load_config', return_value=cfg), \
+             patch('sonarr_youtubedl.validate_config'), \
              patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
              patch('sonarr_youtubedl.Notifier', return_value=MagicMock()), \
              patch.object(_staging_module, 'is_available', return_value=True), \
              patch.object(_staging_module, 'ensure'), \
@@ -955,8 +1009,10 @@ class TestDownloadWithStaging:
     def test_staging_clean_called_at_start(self):
         cfg = {**CFG, 'sonarr': {**CFG['sonarr'], 'staging_path': '/sonarr_staging'}}
         mock_sonarr = make_sonarr_client()
-        with patch('sonarr_youtubedl.checkconfig', return_value=cfg), \
+        with patch('sonarr_youtubedl.load_config', return_value=cfg), \
+             patch('sonarr_youtubedl.validate_config'), \
              patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
              patch('sonarr_youtubedl.Notifier', return_value=MagicMock()), \
              patch.object(_staging_module, 'is_available', return_value=True), \
              patch.object(_staging_module, 'ensure'), \

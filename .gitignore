@@ -8,3 +8,4 @@ sonarr_root/
 config/config.yml
 config/config.yml.template
 logs/
+.coverage
