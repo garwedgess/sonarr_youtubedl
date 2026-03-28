@@ -14,8 +14,8 @@ import downloader
 import staging_manager as staging
 from sonarr_client import SonarrClient
 from notifier import Notifier
-from utils import escapetitle, offsethandler, setup_logging, calculate_backoff, is_rate_limit_error
-from config import load_config, validate_config
+from webhook import Webhook
+from utils import escapetitle, checkconfig, offsethandler, setup_logging, calculate_backoff, is_rate_limit_error
 
 import argparse
 
@@ -43,8 +43,7 @@ last_checked: dict[int, datetime] = {}
 class SonarrYTDL:
 
     def __init__(self):
-        cfg = load_config()
-        validate_config(cfg)
+        cfg = checkconfig()
 
         try:
             self._configure_logging(cfg)
@@ -67,6 +66,7 @@ class SonarrYTDL:
         self._parse_naming(res)
         logger.debug(f"Number style: {self.number_style} folder: {self.season_format}")
         self.notifier = Notifier(cfg)
+        self.webhook = Webhook(cfg)
 
     def _check_sonarr_connection(self):
         try:
@@ -378,6 +378,7 @@ class SonarrYTDL:
             outtmpl = self._library_path(ser, eps)
 
         self.notifier.notify_download_start(ser['title'], eps['title'])
+        self.webhook.notify_download_start(ser['title'], number, eps['title'])
         try:
             success = downloader.download(
                 url=url,
@@ -415,6 +416,7 @@ class SonarrYTDL:
             return False
 
         self.notifier.notify_download_complete(ser['title'], eps['title'])
+        self.webhook.notify_download_complete(ser['title'], number, eps['title'])
 
         # Reset backoff on successful download
         if self.rate_limit_count > 0:

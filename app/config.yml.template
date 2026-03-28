@@ -47,6 +47,15 @@ ytdl:
 #     - download_start
 #     - download_complete
 
+# Optional: outbound webhook notifications
+# Sends a JSON payload on download events to any HTTP endpoint.
+# Compatible with Discord, Home Assistant, n8n, Zapier, or any webhook receiver.
+# webhook:
+#   url: https://your-endpoint.com/hook  # must start with http:// or https://
+#   notify_on:
+#     - download_start
+#     - download_complete
+
 series:
   # Standard channel
   - title: Smarter Every Day

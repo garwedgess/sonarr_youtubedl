@@ -62,6 +62,12 @@ def validate_config(cfg):
         if has_chat and not has_token:
             errors.append("telegram.chat_id is set but telegram.bot_token is missing")
 
+    webhook = cfg.get('webhook', {})
+    if webhook.get('url'):
+        url = webhook['url']
+        if not (url.startswith('http://') or url.startswith('https://')):
+            errors.append("webhook.url must start with http:// or https://")
+
     if errors:
         for error in errors:
             logger.error(f"Config error: {error}")
