@@ -127,3 +127,16 @@ class TestValidateConfig:
         with patch('config.logger') as mock_log, pytest.raises(SystemExit):
             config.validate_config(cfg)
         assert mock_log.error.call_count >= 2
+
+    def test_webhook_invalid_url_exits(self):
+        cfg = make_cfg(webhook={'url': 'not-a-url'})
+        with pytest.raises(SystemExit):
+            config.validate_config(cfg)
+
+    def test_webhook_valid_url_does_not_raise(self):
+        cfg = make_cfg(webhook={'url': 'https://example.com/hook'})
+        config.validate_config(cfg)
+
+    def test_webhook_http_url_does_not_raise(self):
+        cfg = make_cfg(webhook={'url': 'http://example.com/hook'})
+        config.validate_config(cfg)
