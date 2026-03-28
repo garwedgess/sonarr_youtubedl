@@ -52,6 +52,9 @@ class SonarrClient:
     def rescan(self, series_id):
         return self._post("command", {"name": "RescanSeries", "seriesId": str(series_id)})
 
+    def get_health(self):
+        return self._get("health")
+
     def downloaded_episodes_scan(self, path):
         return self._post("command", {
             "name": "DownloadedEpisodesScan",

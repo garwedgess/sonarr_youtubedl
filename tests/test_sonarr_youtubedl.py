@@ -1,3 +1,4 @@
+import copy
 import datetime
 import os
 import sys
@@ -92,8 +93,8 @@ def make_sonarr_client(series=None, episodes=None, naming=None):
     """Return a mock SonarrClient with sensible defaults."""
     mock = MagicMock()
     mock.get_naming_config.return_value = naming or NAMING
-    mock.get_series.return_value = series if series is not None else SONARR_SERIES
-    mock.get_episodes.return_value = episodes if episodes is not None else []
+    mock.get_series.return_value = copy.deepcopy(series if series is not None else SONARR_SERIES)
+    mock.get_episodes.return_value = copy.deepcopy(episodes if episodes is not None else [])
     mock.get_quality_profile.return_value = QUALITY_PROFILE
     return mock
 
@@ -103,7 +104,9 @@ def make_client(cfg=None, series=None, episodes=None):
     mock_sonarr = make_sonarr_client(series=series, episodes=episodes)
     with patch('sonarr_youtubedl.checkconfig', return_value=cfg or CFG), \
          patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
          patch('sonarr_youtubedl.Notifier', return_value=MagicMock()), \
+         patch('sonarr_youtubedl.Webhook', return_value=MagicMock()), \
          patch.object(_staging_module, 'is_available', return_value=False), \
          patch.object(_staging_module, 'ensure'), \
          patch.object(_staging_module, 'clean'), \
@@ -122,6 +125,43 @@ def make_episode(**kwargs):
     ep = dict(EPISODE_BASE)
     ep.update(kwargs)
     return ep
+
+
+# ---------------------------------------------------------------------------
+# TestCheckSonarrConnection
+# ---------------------------------------------------------------------------
+
+class TestCheckSonarrConnection:
+
+    def test_logs_ok_when_healthy(self):
+        client, mock_sonarr = make_client()
+        mock_sonarr.get_health.return_value = []
+        with patch.object(client, 'client', mock_sonarr),              patch('sonarr_youtubedl.logger') as mock_log:
+            client._check_sonarr_connection()
+        assert any('OK' in str(c) for c in mock_log.info.call_args_list)
+
+    def test_logs_warning_for_each_issue(self):
+        client, mock_sonarr = make_client()
+        issues = [
+            {'type': 'warning', 'message': 'Indexer unavailable'},
+            {'type': 'error', 'message': 'Disk space low'},
+        ]
+        mock_sonarr.get_health.return_value = issues
+        with patch.object(client, 'client', mock_sonarr),              patch('sonarr_youtubedl.logger') as mock_log:
+            client._check_sonarr_connection()
+        assert mock_log.warning.call_count == 2
+
+    def test_exits_when_sonarr_unreachable(self):
+        client, mock_sonarr = make_client()
+        mock_sonarr.get_health.side_effect = Exception('Connection refused')
+        with patch.object(client, 'client', mock_sonarr),              pytest.raises(SystemExit):
+            client._check_sonarr_connection()
+
+    def test_continues_when_sonarr_has_warnings(self):
+        client, mock_sonarr = make_client()
+        mock_sonarr.get_health.return_value = [{'type': 'warning', 'message': 'Indexer unavailable'}]
+        with patch.object(client, 'client', mock_sonarr):
+            client._check_sonarr_connection()  # should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +413,43 @@ class TestDownloadEpisode:
         mock_sonarr.refresh.assert_called_once()
         mock_sonarr.rescan.assert_called_once()
 
+    def test_per_series_extra_args_override_global(self):
+        client, _ = self._make()
+        client.ytdl_extra_args = {'playlistend': 20, 'socket_timeout': 30}
+        ser = self._ser(extra_args={'playlistend': 5})
+        with patch('sonarr_youtubedl.downloader') as mock_dl, \
+             patch.object(client, '_library_file_exists', return_value=False):
+            mock_dl.search.return_value = None
+            client._download_episode(ser, self._eps())
+        called_args = mock_dl.search.call_args[1]['extra_args']
+        assert called_args['playlistend'] == 5
+        assert called_args['socket_timeout'] == 30
+
+    def test_global_extra_args_used_when_no_series_override(self):
+        client, _ = self._make()
+        client.ytdl_extra_args = {'socket_timeout': 30}
+        ser = self._ser()
+        with patch('sonarr_youtubedl.downloader') as mock_dl, \
+             patch.object(client, '_library_file_exists', return_value=False):
+            mock_dl.search.return_value = None
+            client._download_episode(ser, self._eps())
+        called_args = mock_dl.search.call_args[1]['extra_args']
+        assert called_args['socket_timeout'] == 30
+
+    def test_merged_extra_args_passed_to_download(self):
+        client, mock_sonarr = self._make()
+        client.ytdl_extra_args = {'socket_timeout': 30}
+        ser = self._ser(extra_args={'playlistend': 5})
+        with patch('sonarr_youtubedl.downloader') as mock_dl, \
+             patch.object(client, '_library_file_exists', return_value=False), \
+             patch('sonarr_youtubedl.time.sleep'):
+            mock_dl.search.return_value = 'https://youtube.com/watch?v=123'
+            mock_dl.download.return_value = True
+            client._download_episode(ser, self._eps())
+        called_args = mock_dl.download.call_args[1]['extra_args']
+        assert called_args['playlistend'] == 5
+        assert called_args['socket_timeout'] == 30
+
     def test_download_failure_returns_false(self):
         client, _ = self._make()
         with patch('sonarr_youtubedl.downloader') as mock_dl, \
@@ -535,6 +612,7 @@ class TestConfigureLogging:
         mock_sonarr = make_sonarr_client()
         with patch('sonarr_youtubedl.checkconfig', return_value=cfg), \
              patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
              patch('sonarr_youtubedl.Notifier'), \
              patch('sonarr_youtubedl.logger') as mock_log:
             SonarrYTDL()
@@ -545,6 +623,7 @@ class TestConfigureLogging:
         mock_sonarr = make_sonarr_client()
         with patch('sonarr_youtubedl.checkconfig', return_value=CFG), \
              patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
              patch('sonarr_youtubedl.Notifier'), \
              patch('sonarr_youtubedl.logger') as mock_log:
             SonarrYTDL()
@@ -662,6 +741,7 @@ class TestGetMissingEpisodesAdditional:
         )
         with patch('sonarr_youtubedl.checkconfig', return_value=cfg), \
              patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
              patch('sonarr_youtubedl.Notifier'):
             client = SonarrYTDL()
         client.sonarr = mock_sonarr
@@ -686,6 +766,17 @@ class TestConfigureInit:
              patch('sonarr_youtubedl.Notifier'):
             with pytest.raises(SystemExit):
                 SonarrYTDL()
+
+
+    def test_generic_configuration_error_exits(self):
+        with patch('config.load_config', return_value=CFG), \
+             patch('config.validate_config'), \
+             patch('sonarr_youtubedl.SonarrClient'), \
+             patch('sonarr_youtubedl.Notifier'), \
+             patch('sonarr_youtubedl.Webhook'), \
+             patch.object(SonarrYTDL, '_configure_logging', side_effect=Exception('unexpected error')), \
+             pytest.raises(SystemExit):
+            SonarrYTDL()
 
     def test_debug_key_missing_defaults_false(self):
         cfg = {**CFG, 'sonarrytdl': {k: v for k, v in CFG['sonarrytdl'].items() if k != 'debug'}}
@@ -742,7 +833,10 @@ class TestConfigureStaging:
         mock_sonarr = make_sonarr_client()
         with patch('sonarr_youtubedl.checkconfig', return_value=cfg), \
              patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
              patch('sonarr_youtubedl.Notifier', return_value=MagicMock()), \
+             patch('sonarr_youtubedl.Webhook', return_value=MagicMock()), \
+         patch('sonarr_youtubedl.Webhook', return_value=MagicMock()), \
              patch.object(_staging_module, 'is_available', return_value=True), \
              patch.object(_staging_module, 'ensure') as mock_ensure, \
              patch.object(_staging_module, 'clean'), \
@@ -758,7 +852,10 @@ class TestConfigureStaging:
         mock_sonarr = make_sonarr_client()
         with patch('sonarr_youtubedl.checkconfig', return_value=cfg), \
              patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
              patch('sonarr_youtubedl.Notifier', return_value=MagicMock()), \
+             patch('sonarr_youtubedl.Webhook', return_value=MagicMock()), \
+         patch('sonarr_youtubedl.Webhook', return_value=MagicMock()), \
              patch.object(_staging_module, 'is_available', return_value=False), \
              patch.object(_staging_module, 'ensure'), \
              patch.object(_staging_module, 'clean'), \
@@ -830,7 +927,10 @@ class TestDownloadEpisodeStaging:
         mock_sonarr = make_sonarr_client()
         with patch('sonarr_youtubedl.checkconfig', return_value=cfg), \
              patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
              patch('sonarr_youtubedl.Notifier', return_value=MagicMock()), \
+             patch('sonarr_youtubedl.Webhook', return_value=MagicMock()), \
+         patch('sonarr_youtubedl.Webhook', return_value=MagicMock()), \
              patch.object(_staging_module, 'is_available', return_value=True), \
              patch.object(_staging_module, 'ensure'), \
              patch.object(_staging_module, 'clean'), \
@@ -919,7 +1019,10 @@ class TestDownloadWithStaging:
         mock_sonarr = make_sonarr_client()
         with patch('sonarr_youtubedl.checkconfig', return_value=cfg), \
              patch('sonarr_youtubedl.SonarrClient', return_value=mock_sonarr), \
+         patch.object(mock_sonarr, 'get_health', return_value=[]), \
              patch('sonarr_youtubedl.Notifier', return_value=MagicMock()), \
+             patch('sonarr_youtubedl.Webhook', return_value=MagicMock()), \
+         patch('sonarr_youtubedl.Webhook', return_value=MagicMock()), \
              patch.object(_staging_module, 'is_available', return_value=True), \
              patch.object(_staging_module, 'ensure'), \
              patch.object(_staging_module, 'clean') as mock_clean, \
@@ -970,6 +1073,37 @@ class TestFilterseriesAdditional:
         client, _ = make_client(cfg=cfg)
         result = client.filterseries()
         assert result[0]['site_regex'] == {'match': r'^Ms Rachel - ', 'replace': ''}
+
+    def test_per_series_extra_args_parsed(self):
+        cfg = {**CFG, 'series': [{
+            'title': 'Ms Rachel',
+            'url': 'https://youtube.com/channel/msrachel',
+            'extra_args': {'playlistend': '10', 'sponsorblock_remove': 'sponsor'},
+        }]}
+        client, _ = make_client(cfg=cfg)
+        result = client.filterseries()
+        assert result[0]['extra_args']['playlistend'] == 10
+        assert result[0]['extra_args']['sponsorblock_remove'] == 'sponsor'
+
+    def test_per_series_extra_args_bool_parsed(self):
+        cfg = {**CFG, 'series': [{
+            'title': 'Ms Rachel',
+            'url': 'https://youtube.com/channel/msrachel',
+            'extra_args': {'noplaylist': 'true'},
+        }]}
+        client, _ = make_client(cfg=cfg)
+        result = client.filterseries()
+        assert result[0]['extra_args']['noplaylist'] is True
+
+    def test_per_series_extra_args_not_set_when_absent(self):
+        cfg = {**CFG, 'series': [{
+            'title': 'Ms Rachel',
+            'url': 'https://youtube.com/channel/msrachel',
+        }]}
+        client, _ = make_client(cfg=cfg)
+        result = client.filterseries()
+        assert 'extra_args' not in result[0]
+
 
 
 # ---------------------------------------------------------------------------

@@ -11,8 +11,8 @@
 - Imports via Sonarr's `DownloadedEpisodesScan` for proper history entries
 - Fuzzy title matching with regex pre-filter - handles title mismatches between TVDB and YouTube
 - PO token support via [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider) for authenticated YouTube access
-- Telegram notifications on download start and completion
-- Per-series configuration: custom format, cookies, subtitles, time offsets, regex title cleanup, scan intervals
+- Telegram and webhook notifications on download start and completion
+- Per-series configuration: custom format, cookies, subtitles, time offsets, regex title cleanup, scan intervals, yt-dlp options
 - Duplicate file protection - skips downloads if file already exists in library or staging
 - Optional staging directory for clean separation between downloads and media library
 - Automatic exponential backoff on YouTube rate limiting
@@ -167,6 +167,32 @@ telegram:
 To find your `chat_id`, message your bot then visit:
 `api.telegram.org/bot<your_token>/getUpdates`
 
+## Webhook Notifications
+
+Optional outbound webhook on download events. Sends a JSON payload to any HTTP endpoint - compatible with Discord, Home Assistant, n8n, Zapier, or anything that accepts a webhook.
+
+```yaml
+webhook:
+  url: https://your-endpoint.com/hook
+  notify_on:
+    - download_start
+    - download_complete
+```
+
+The payload looks like:
+
+```json
+{
+  "event": "download_complete",
+  "series": "Ms Rachel - Songs for Littles",
+  "episode": "S05E06",
+  "title": "Counting numbers",
+  "timestamp": "2026-03-21T12:00:00+00:00"
+}
+```
+
+Telegram and webhook can be used simultaneously or independently.
+
 ## Rate Limiting
 
 If YouTube rate limits a download, the script automatically sleeps and retries with exponential backoff. No configuration is required - sensible defaults are used out of the box.
@@ -193,6 +219,7 @@ With the defaults, consecutive hits sleep for 15m → 30m → 60m → 60m (cappe
 | `min_check_interval` | Minimum minutes between yt-dlp scans for this series. Sonarr is still polled every `scan_interval`. |
 | `offset` | Time offset for pre-release episodes e.g. `days: 2, hours: 3` |
 | `subtitles` | Download and embed subtitles. See template for options. |
+| `extra_args` | Per-series yt-dlp options, merged over global `extra_args`. Series values take priority. |
 | `regex.sonarr` | Regex match/replace applied to the Sonarr episode title before matching |
 | `regex.site` | Regex match/replace applied to the YouTube search term independently |
 
@@ -208,3 +235,18 @@ regex:
     match: ' PT \d+'
     replace: ''
 ```
+
+## Per-series yt-dlp options
+
+Any yt-dlp option can be set per-series under `extra_args`, overriding the global value for that series only. Useful for limiting playlist scans on large channels or enabling SponsorBlock on specific series:
+
+```yaml
+series:
+  - title: Ms Rachel - Songs for Littles
+    url: https://www.youtube.com/channel/UCG2CL6EUjG8TVT1Tpl9nJdg/videos
+    extra_args:
+      playlistend: 20                                      # only scan 20 most recent videos
+      sponsorblock_remove: sponsor,selfpromo,interaction   # remove sponsor segments
+```
+
+See the [yt-dlp documentation](https://github.com/yt-dlp/yt-dlp) for all available options.

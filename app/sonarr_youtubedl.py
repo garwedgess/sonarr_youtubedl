@@ -14,6 +14,7 @@ import downloader
 import staging_manager as staging
 from sonarr_client import SonarrClient
 from notifier import Notifier
+from webhook import Webhook
 from utils import escapetitle, checkconfig, offsethandler, setup_logging, calculate_backoff, is_rate_limit_error
 
 import argparse
@@ -59,10 +60,26 @@ class SonarrYTDL:
         self.series_config = cfg.get('series', [])
         self.client = SonarrClient(self.base_url, self.api_version, self.api_key)
 
+        self._check_sonarr_connection()
+
         res = self.client.get_naming_config()
         self._parse_naming(res)
         logger.debug(f"Number style: {self.number_style} folder: {self.season_format}")
         self.notifier = Notifier(cfg)
+        self.webhook = Webhook(cfg)
+
+    def _check_sonarr_connection(self):
+        try:
+            issues = self.client.get_health()
+            if issues:
+                for issue in issues:
+                    level = issue.get('type', 'unknown')
+                    message = issue.get('message', '')
+                    logger.warning(f"Sonarr health {level}: {message}")
+            else:
+                logger.info("Sonarr connection OK")
+        except Exception as e:
+            sys.exit(f"Cannot connect to Sonarr at {self.base_url}: {e}")
 
     def _configure_logging(self, cfg):
         global SCANINTERVAL
@@ -254,6 +271,18 @@ class SonarrYTDL:
             if 'offset' in cfg:
                 ser['offset'] = cfg['offset']
 
+            if 'extra_args' in cfg:
+                parsed = {}
+                for key, value in cfg['extra_args'].items():
+                    if str(value).lower() in ('true', 'false'):
+                        parsed[key] = str(value).lower() == 'true'
+                    else:
+                        try:
+                            parsed[key] = int(value)
+                        except (ValueError, TypeError):
+                            parsed[key] = value
+                ser['extra_args'] = parsed
+
             if not ser['monitored']:
                 logger.warning(f"{ser['title']} is not monitored")
 
@@ -323,13 +352,15 @@ class SonarrYTDL:
         if 'site_regex' in ser:
             episode_title = re.sub(ser['site_regex']['match'], ser['site_regex']['replace'], episode_title)
 
+        extra_args = {**self.ytdl_extra_args, **ser.get('extra_args', {})}
+
         url = downloader.search(
             playlist_url=ser['url'],
             series_title=ser['title'],
             episode_title=episode_title,
             playlistreverse=ser['playlistreverse'],
             cookies=ser.get('cookies_file'),
-            extra_args=self.ytdl_extra_args or None,
+            extra_args=extra_args or None,
             debug=self.debug
         )
 
@@ -347,13 +378,14 @@ class SonarrYTDL:
             outtmpl = self._library_path(ser, eps)
 
         self.notifier.notify_download_start(ser['title'], eps['title'])
+        self.webhook.notify_download_start(ser['title'], number, eps['title'])
         try:
             success = downloader.download(
                 url=url,
                 outtmpl=outtmpl,
                 quality_format=quality,
                 cookies=ser.get('cookies_file'),
-                extra_args=self.ytdl_extra_args or None,
+                extra_args=extra_args or None,
                 subtitles=subtitles,
                 debug=self.debug
             )
@@ -384,6 +416,7 @@ class SonarrYTDL:
             return False
 
         self.notifier.notify_download_complete(ser['title'], eps['title'])
+        self.webhook.notify_download_complete(ser['title'], number, eps['title'])
 
         # Reset backoff on successful download
         if self.rate_limit_count > 0:

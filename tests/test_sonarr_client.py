@@ -297,3 +297,30 @@ class TestDownloadedEpisodesScan:
             client.downloaded_episodes_scan('/staging/ep.mkv')
             body = mock.call_args[1]['json']
         assert body['importMode'] == 'Move'
+
+# ---------------------------------------------------------------------------
+# TestGetHealth
+# ---------------------------------------------------------------------------
+
+class TestGetHealth:
+
+    def test_calls_health_endpoint(self):
+        client = make_client()
+        with patch('sonarr_client.requests.get') as mock:
+            mock.return_value = MagicMock(json=MagicMock(return_value=[]))
+            client.get_health()
+            url = mock.call_args[0][0]
+        assert 'health' in url
+
+    def test_returns_empty_list_when_healthy(self):
+        client = make_client()
+        with patch('sonarr_client.requests.get') as mock:
+            mock.return_value = MagicMock(json=MagicMock(return_value=[]))
+            assert client.get_health() == []
+
+    def test_returns_issues_when_present(self):
+        client = make_client()
+        issues = [{'type': 'warning', 'message': 'Indexer unavailable', 'source': 'IndexerStatusCheck'}]
+        with patch('sonarr_client.requests.get') as mock:
+            mock.return_value = MagicMock(json=MagicMock(return_value=issues))
+            assert client.get_health() == issues
