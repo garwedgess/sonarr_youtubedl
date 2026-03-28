@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/garwedgess/sonarr_youtubedl/compare/v1.1.0...v1.2.0) (2026-03-28)
+
+
+### Features
+
+* config validation, Sonarr health check, and config module refactor ([02f69e6](https://github.com/garwedgess/sonarr_youtubedl/commit/02f69e65c06c9e5cb03bfb4de794164f792c9069))
+* outbound webhook notifications ([9f328d9](https://github.com/garwedgess/sonarr_youtubedl/commit/9f328d98e550ddc47952bc77bb57798d2f20da1c))
+* outbound webhook notifications ([1b288ea](https://github.com/garwedgess/sonarr_youtubedl/commit/1b288ea561eeb348daf45d18e0926ddcb10292d4))
+* per-series extra_args override global ytdl options ([e55bc5d](https://github.com/garwedgess/sonarr_youtubedl/commit/e55bc5d5123f01e9016aaf2d67a38747d86dfdcd))
+* per-series yt-dlp extra_args overrides ([df87990](https://github.com/garwedgess/sonarr_youtubedl/commit/df8799070dee6711c11c3294a8b3c9359b0a2072))
+* startup validation and config module ([8445fd2](https://github.com/garwedgess/sonarr_youtubedl/commit/8445fd2ff5ff4d726b07069e3e2b9290e24613ea))
+
 ## [1.1.0](https://github.com/garwedgess/sonarr_youtubedl/compare/v1.0.0...v1.1.0) (2026-03-18)
 
 
