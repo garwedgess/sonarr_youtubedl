@@ -9,7 +9,7 @@
 
 - Automatic downloading of web series from YouTube and other supported sites
 - Imports via Sonarr's `DownloadedEpisodesScan` for proper history entries
-- Fuzzy title matching with regex pre-filter - handles title mismatches between TVDB and YouTube
+- Episode-title matching with punctuation tolerance; unmatched titles are left missing
 - PO token support via [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider) for authenticated YouTube access
 - Telegram and webhook notifications on download start and completion
 - Per-series configuration: custom format, cookies, subtitles, time offsets, regex title cleanup, scan intervals, yt-dlp options
@@ -21,7 +21,7 @@
 
 1. Sonarr is polled for monitored, missing, aired episodes
 2. For each missing episode the YouTube channel or playlist is fetched
-3. The episode title is matched against playlist entries using regex, with fuzzy matching as fallback
+3. The episode title must match a playlist title using regex; fuzzy ranking only chooses between matching entries
 4. The video is downloaded to a staging directory (if configured) or directly to the library
 5. Sonarr is notified to import the file, creating a history entry
 6. If Sonarr doesn't import within 60 minutes the file is moved to the library directly as fallback
@@ -225,7 +225,7 @@ With the defaults, consecutive hits sleep for 15m → 30m → 60m → 60m (cappe
 
 ## Notes on title matching
 
-This script matches Sonarr episode titles against YouTube video titles. The TVDB (Sonarr's metadata source) and YouTube don't always agree on episode titles. A regex pre-filter is applied first - if nothing matches, fuzzy matching runs across the full playlist as fallback. Both happen in a single API call.
+This script matches Sonarr episode titles against YouTube video titles. The TVDB (Sonarr's metadata source) and YouTube don't always agree on episode titles. A regex title filter is applied first. If nothing matches, the episode is left missing and a warning is logged; the script never picks an unrelated video from the full playlist. Fuzzy ranking only chooses between entries that passed the title filter. Placeholder titles may require updated metadata or a verified manual download.
 
 If a series consistently fails to match, use `regex.sonarr` to clean up the Sonarr title:
 

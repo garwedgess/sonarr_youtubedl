@@ -14,7 +14,12 @@ def _pot_args():
         'extractor_args': {
             'youtubepot-bgutilscript': {
                 'server_home': [BGUTIL_SERVER]
-            }
+            },
+            # The logged-in default currently prefers tv_downgraded, which
+            # can yield media URLs that Google Video rejects with HTTP 403.
+            'youtube': {
+                'player_client': ['default,web_embedded']
+            },
         },
         'js_runtimes': {'node': {'path': NODE_PATH}},
         'remote_components': {'ejs:github'},
@@ -24,8 +29,8 @@ def _pot_args():
 def search(playlist_url, series_title, episode_title, playlistreverse, cookies=None, extra_args=None, debug=False):
     """Fetch playlist index and return the best matching video URL.
 
-    Applies regex filter first, falls back to fuzzy match on full playlist
-    if nothing matches - all in a single API call via extract_flat.
+    Requires an episode-title match. Fuzzy ranking only breaks ties among
+    matching titles; unmatched metadata must wait rather than select another episode.
     """
     opts = {
         'ignoreerrors': True,
@@ -62,21 +67,27 @@ def search(playlist_url, series_title, episode_title, playlistreverse, cookies=N
     if not entries:
         return None
 
+    if not episode_title or not episode_title.strip():
+        logger.warning("Skipping search with an empty episode title")
+        return None
+
     regextitle = escapetitle(episode_title)
     logger.debug(f"Match regex: {regextitle}")
 
-    filtered = [e for e in entries if re.search(regextitle, e.get('title', ''), re.IGNORECASE)]
+    filtered = [e for e in entries if re.search(regextitle, (e.get('title') or ''), re.IGNORECASE)]
     if filtered:
         logger.debug(f"Regex matched {len(filtered)} of {len(entries)} entries")
         candidates = filtered
     else:
-        logger.debug(f"Regex matched nothing, using fuzzy on full playlist ({len(entries)} entries)")
-        candidates = entries
+        logger.warning(f"No title match for {series_title} - {episode_title}; leaving episode missing")
+        return None
 
     try:
         titles = [e.get('title', '').lower() for e in candidates]
         index = find_best_match_index(titles, f"{series_title} - {episode_title}".lower())
-        url = candidates[index].get('webpage_url') or candidates[index].get('url')
+        selected = candidates[index]
+        url = selected.get('webpage_url') or selected.get('url')
+        logger.info(f"Matched {episode_title!r} to {selected.get('title')!r}: {url}")
         return url if url and url != playlist_url else None
     except Exception as e:
         logger.error(f"Error selecting best match: {e}")
