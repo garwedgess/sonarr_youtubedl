@@ -57,6 +57,11 @@ class TestPotArgs:
         server_home = pot['extractor_args']['youtubepot-bgutilscript']['server_home']
         assert downloader.BGUTIL_SERVER in server_home
 
+    def test_youtube_player_client_fallback_set(self):
+        pot = downloader._pot_args()
+        player_client = pot['extractor_args']['youtube']['player_client']
+        assert player_client == ['default,web_embedded']
+
     def test_js_runtimes_present(self):
         pot = downloader._pot_args()
         assert 'js_runtimes' in pot
@@ -134,12 +139,22 @@ class TestSearch:
             result = downloader.search(PLAYLIST_URL, 'Ms Rachel', 'colours and shapes', True)
         assert result == entries[0]['webpage_url']
 
-    def test_no_regex_match_falls_back_to_fuzzy(self):
+    def test_no_title_match_leaves_episode_missing(self):
         entries = make_entries('Ms Rachel - Colours and Shapes', 'Ms Rachel - ABC Song')
         with patch('downloader.yt_dlp.YoutubeDL', return_value=make_ydl_context({'entries': entries})):
-            # Title won't regex match exactly but fuzzy should pick closest
+            # A similar title alone must not select a different episode.
             result = downloader.search(PLAYLIST_URL, 'Ms Rachel', 'Colours and Shapes for Toddlers', True)
-        assert result is not None
+        assert result is None
+
+    @pytest.mark.parametrize('episode_title', ['South Carolina', '', '   '])
+    def test_project_fear_rejects_unrelated_channel_videos(self, episode_title):
+        entries = make_entries(
+            'DESTINATION FEAR CANCELLED FOR THIS REASON!',
+            'Haunted Charleston Jail: Overnight Turned Evil',
+            'Our Terrifying Night at the Haunted Queen Mary',
+        )
+        with patch('downloader.yt_dlp.YoutubeDL', return_value=make_ydl_context({'entries': entries})):
+            assert downloader.search(PLAYLIST_URL, 'Project Fear (2023)', episode_title, True) is None
 
     def test_result_url_falls_back_to_url_key(self):
         entries = [{'title': 'Ms Rachel - Colours', 'url': VIDEO_URL}]

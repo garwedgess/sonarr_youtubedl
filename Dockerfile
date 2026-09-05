@@ -34,8 +34,8 @@ RUN ARCH=$(dpkg --print-architecture) && \
     | tar -xJ -C /usr/local --strip-components=1 && \
     node -v && npm -v
 
-# Install bgutil PO token provider
-RUN git clone --depth 1 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git /root/bgutil-ytdlp-pot-provider && \
+# Install the matching bgutil PO token provider server
+RUN git clone --depth 1 --branch 1.3.2 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git /root/bgutil-ytdlp-pot-provider && \
     cd /root/bgutil-ytdlp-pot-provider/server && \
     npm install && \
     npx tsc
