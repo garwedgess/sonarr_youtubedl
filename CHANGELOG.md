@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/garwedgess/sonarr_youtubedl/compare/v1.2.0...v1.2.1) (2026-09-05)
+
+
+### Bug Fixes
+
+* prevent unrelated downloads and update YouTube compatibility ([89c0920](https://github.com/garwedgess/sonarr_youtubedl/commit/89c092016a116637a51aa0e61368fa7a9450ef5e))
+
 ## [1.2.0](https://github.com/garwedgess/sonarr_youtubedl/compare/v1.1.0...v1.2.0) (2026-03-28)
 
 
